@@ -39,7 +39,7 @@ MCP stdio 的客户端调用。项目提供 26 个 ZWCAD 自动化工具。
 
 ## 配置 WorkBuddy
 
-打开 `workbuddy-mcp.json`，将其中两处 `D:\\YOUR_PATH` 替换为项目实际所在目录。
+打开 `workbuddy-mcp.json`，将其中两处 `D:\\YOUR_PATH\\ZWCAD-Platform-MCP` 替换为项目实际所在目录。
 例如项目位于 `D:\Tools\ZWCAD-Platform-MCP` 时：
 
 ```json
