@@ -61,8 +61,11 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 - 本 Skill 已包含执行任务所需的工作流、能力索引和排障规则；无需读取其他项目文档即可开始工作。
 - 调用前检查目标工具的 description 与 input schema，再按当前 schema 传参；不要根据工具名称猜测参数，角度单位一律使用弧度。
 - 工具调用失败时优先读取返回的 `error` / `code` / `hint` 字段，并结合「常见错误场景」排查。
+- 详细工具索引和参数语义见本 Skill 后面的附录，不影响上述发现流程。
 
-### 工具能力索引
+---
+
+## 附录 A：工具能力索引
 
 以下索引用于按任务定位工具。第三列列出主要输入参数、动作和动作对应的 `params` 字段；具体 schema 仍以运行时 `tools/list` 返回为准。
 
@@ -137,9 +140,11 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 | `zwcad_manage_xdata` | 读写实体扩展数据 | `action`：`list_apps`、`register_app`、`get_xdata`、`set_xdata`、`delete_xdata`；`params`：`handle`、应用名、数据类型和值 |
 | `zwcad_manage_utility` | 执行 CAD 通用计算和对象辅助操作 | `action`：`translate_coordinates`、`polar_point`、`angle_to_real`、`angle_to_string`、`real_to_string`、`distance_to_real`、`prompt`、`get_object_id_string`；`params`：点、角度、距离、单位和精度等 |
 
-当用户提出能力需求时，先从上述索引定位工具，再读取该工具的运行时 schema；如果工具未出现在 `tools/list` 中，才判断当前服务版本不具备该能力。
+当用户提出能力需求时，先从本附录定位工具，再读取该工具的运行时 schema；如果工具未出现在 `tools/list` 中，才判断当前服务版本不具备该能力。
 
-### 参数语义
+---
+
+## 附录 B：工具参数参考
 
 以下说明解释各工具参数的用途。坐标沿用当前图纸单位，角度统一使用弧度；方括号表示可选字段。
 
