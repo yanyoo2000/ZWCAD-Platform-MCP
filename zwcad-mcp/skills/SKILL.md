@@ -57,17 +57,26 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 
 ## 工具发现机制（重要）
 
-- 全部工具由 **MCP 服务动态提供**（`tools/list`），当前版本 39 个（平台 26 + 机械 11 + 诊断 2），随版本演进可能增减。工具名称、参数与输入 schema 一律**以 MCP 服务返回为准**，本文档不再重复罗列。
-- 调用前先查目标工具的 description 与 input schema，再按其说明传参（角度单位为弧度）。
+- MCP 服务启动后，先通过 `tools/list` 获取当前实际暴露的工具、description 和 input schema；运行时结果优先于静态文档。
+- 本 Skill 已包含执行任务所需的工作流、能力索引和排障规则；无需读取其他项目文档即可开始工作。
+- 调用前检查目标工具的 description 与 input schema，再按当前 schema 传参；不要根据工具名称猜测参数，角度单位一律使用弧度。
 - 工具调用失败时优先读取返回的 `error` / `code` / `hint` 字段，并结合「常见错误场景」排查。
 
-> **参考信息源**：本 Skill 涉及的工具详细说明、类型库加载机制与重要说明，以 `zwcad-mcp` 包随附的 README 为准。本连接器默认通过 `uvx` 启动，此时 `README.md` 位于 uv 缓存目录中（路径含随机哈希、不固定，无需手工查找）；若改用 `pip` 安装，则位于对应 Python 环境的 `site-packages` 目录下。README 内容与同版本 `dist-info\METADATA` 中的描述一致，任何安装方式下均可这样读取全文：
->
-> ```bash
-> python -c "import importlib.metadata as m; print(m.metadata('zwcad-mcp')['Description'])"
-> ```
->
-> 下文中的「README」均指此文档。
+### 工具能力索引
+
+以下索引用于按任务定位工具，具体参数和动作以运行时 `tools/list` 返回为准：
+
+- **绘图**：`zwcad_draw_entity`、`zwcad_draw_batch`、`zwcad_draw_3d_solid`
+- **注释与标注**：`zwcad_add_annotation`、`zwcad_add_dimension`、`zwcad_insert_block`
+- **实体查询与修改**：`zwcad_find_object`、`zwcad_get_objects_in_model`、`zwcad_get_entity_info`、`zwcad_set_entity_properties`、`zwcad_transform_entity`、`zwcad_modify_entity`
+- **尺寸查询**：`zwcad_query_dimensions`
+- **样式与视图**：`zwcad_manage_style`、`zwcad_manage_view`、`zwcad_zoom`
+- **文档、表格、选择集和图块**：`zwcad_manage_document`、`zwcad_manage_table`、`zwcad_select_entities`、`zwcad_manage_block`
+- **系统与诊断**：`zwcad_get_variable`、`zwcad_set_variable`、`zwcad_get_app_info`、`zwcad_get_capabilities`、`zwcad_diagnose`、`zwcad_mech_diagnose`
+- **机械扩展**：`zwcad_mech_manage_title_block`、`zwcad_mech_manage_frame`、`zwcad_mech_create_frame`、`zwcad_mech_manage_bom`、`zwcad_mech_create_partlist`、`zwcad_mech_manage_db`、`zwcad_mech_doc`、`zwcad_mech_cad_environment_init`、`zwcad_mech_get_balloon`、`zwcad_mech_insert_balloon`
+- **扩展数据与 CAD 工具**：`zwcad_manage_dictionary`、`zwcad_manage_xdata`、`zwcad_manage_utility`
+
+当用户提出能力需求时，先从上述索引定位工具，再读取该工具的运行时 schema；如果工具未出现在 `tools/list` 中，才判断当前服务版本不具备该能力。
 
 ---
 
@@ -86,7 +95,7 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 3. **机械流程**：机械诊断 → 初始化标准 → 建图框 → 填标题栏 → 球标/BOM，按此顺序执行。
 4. **排障**：`zwcad_diagnose(probe_cad=true)` 获取平台/机械连接状态与修复建议。
 
-> 绘图/标注/变换/样式管理等工具的名称、参数与枚举值不再在此罗列；调用前通过 `tools/list` 及目标工具的 description 与 input schema 获取最新定义，亦可查阅 README「工具详细说明」。
+> 绘图、标注、变换、样式管理等工具的参数与枚举值可能随版本演进；调用前通过 `tools/list` 及目标工具的 description 与 input schema 获取最新定义。
 
 ---
 
@@ -100,14 +109,14 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 | uv 未安装          | 命令和常见路径都找不到 `uvx.exe`                                                                  | 一键装 uv（自带 uvx）后重连，见「③ B」                                                                                                   |
 | 已有本地 MCP 服务  | `~/.workbuddy/mcp.json` 中服务已配置但 `disabled: true`，venv 完整                                | 连接器管理页启用即可绕开 uvx，见「③ C」                                                                                                  |
 | 未启动/未打开图纸  | `Connection closed`、COM 初始化错误（-2147221008）                                              | 启动 ZWCAD 并打开 DWG，重启 MCP                                                                                                             |
-| 机械工具失败       | `MECHANICAL_NOT_AVAILABLE` / `TYPELIB_NOT_LOADED`                                               | 调用 `zwcad_mech_diagnose` 获取逐项探测结果与修复建议；类型库加载机制与 `PYZWCADMECH_TLB_PATH` 配置详见 README「ZwmToolKit 类型库加载机制」 |
+| 机械工具失败       | `MECHANICAL_NOT_AVAILABLE` / `TYPELIB_NOT_LOADED`                                               | 调用 `zwcad_mech_diagnose` 获取逐项探测结果与修复建议；必要时设置 `PYZWCADMECH_TLB_PATH` |
 | 机械类型库解析失败 | `TYPELIB_NOT_LOADED`，`typelib_error` 含 `-2147312566`（`0x80029C4A`）「加载类型库/DLL 时出错」 | 按下方「机械类型库加载失败（-2147312566）的处置」分步处理，多数情况在第 1~3 步内解决                                                        |
 | 首次拉取依赖失败   | `uvx` 下载慢、超时或网络错误                                                                    | 配置 `UV_DEFAULT_INDEX` 指向国内镜像（如 `https://pypi.tuna.tsinghua.edu.cn/simple`）后重启客户端                                           |
 | 中文乱码           | `mbcs codec can't decode bytes`                                                                 | 确认使用本项目 server（`PYTHONUTF8=1`）并完全重启 WorkBuddy                                                                                 |
-| 操作错窗口         | 多开时改到非预期图纸                                                                            | 关闭其他 ZWCAD 实例，仅保留目标产品后重连（单活动实例策略详见 README「重要说明」及上文「安全约束」）                                        |
+| 操作错窗口         | 多开时改到非预期图纸                                                                            | 关闭其他 ZWCAD 实例，仅保留目标产品后重连，并重新执行环境探测                                        |
 | 实体找不到         | 返回空结果                                                                                      | 先用 `zwcad_get_objects_in_model` 确认真实 object_type/handle，再过滤                                                                       |
 | 参数不匹配         | `缺少参数` 错误                                                                                 | 对照工具 description 补全必填字段；角度用弧度                                                                                               |
-| 机械样式缺失       | 图框/标题栏操作报 XML 解析错误                                                                  | 用 `zwcad_get_app_info(scope="mech_style_path")` 查询本机实际样式路径并确认存在对应标准（GB 等）；路径与版本对应关系详见 README「重要说明」 |
+| 机械样式缺失       | 图框/标题栏操作报 XML 解析错误                                                                  | 用 `zwcad_get_app_info(scope="mech_style_path")` 查询本机实际样式路径，并确认对应标准（如 GB）的样式文件存在 |
 
 > 工具返回的 `error` / `code` / `hint` 三字段是排障的权威信息；表中未覆盖的错误码同样按这三字段排查，并以工具 description 为准。
 
@@ -133,4 +142,4 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 - **单位与弧度**：坐标沿用当前图纸单位；角度一律弧度。
 - **样式走 XML**：标准/标题栏/BOM/图框样式名来自本机 `styles/*.xml`，可用 `zwcad_mech_manage_*` 查询后使用。
 
-> 探测先行、先查询后操作、写入需确认等约定已并入「工作流原则」与「进程与文档安全约束」，不再重复罗列；工具能力细节见 README「工具详细说明」。
+> 探测先行、先查询后操作、写入需确认等约定已并入「工作流原则」与「进程与文档安全约束」；工具能力以运行时 `tools/list` 返回为准。
