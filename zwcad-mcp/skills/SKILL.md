@@ -64,17 +64,56 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 
 ### 工具能力索引
 
-以下索引用于按任务定位工具，具体参数和动作以运行时 `tools/list` 返回为准：
+以下索引用于按任务定位工具。工具后的括号表示“顶层参数总数 / 必填参数数”；`params` 内部的动作参数不计入该数量，具体字段和动作仍以运行时 `tools/list` 返回为准：
 
-- **绘图**：`zwcad_draw_entity` 创建单个二维实体，`zwcad_draw_batch` 批量创建多个实体，`zwcad_draw_3d_solid` 创建基础三维实体。
-- **注释与标注**：`zwcad_add_annotation` 添加文字、引线、填充等注释，`zwcad_add_dimension` 创建尺寸标注，`zwcad_insert_block` 插入图块引用。
-- **实体查询与修改**：`zwcad_find_object` 按条件或句柄定位实体，`zwcad_get_objects_in_model` 获取模型空间对象，`zwcad_get_entity_info` 读取实体详情，`zwcad_set_entity_properties` 修改图层/颜色/线型等通用属性，`zwcad_transform_entity` 执行复制、移动、旋转、镜像、缩放、删除和阵列，`zwcad_modify_entity` 修改实体几何属性。
-- **尺寸查询**：`zwcad_query_dimensions` 批量读取尺寸值、公差、标注文字和样式等信息。
-- **样式与视图**：`zwcad_manage_style` 管理图层、线型、文字样式和标注样式，`zwcad_manage_view` 管理布局与视图，`zwcad_zoom` 控制当前视图范围。
-- **文档、表格、选择集和图块**：`zwcad_manage_document` 管理图纸生命周期、保存、导入导出和打印，`zwcad_manage_table` 操作表格，`zwcad_select_entities` 创建和管理选择集，`zwcad_manage_block` 管理图块定义及属性。
-- **系统与诊断**：`zwcad_get_variable` / `zwcad_set_variable` 读写系统变量，`zwcad_get_app_info` 获取 CAD 和机械环境信息，`zwcad_get_capabilities` 查看当前能力，`zwcad_diagnose` 诊断平台连接，`zwcad_mech_diagnose` 诊断机械扩展和类型库。
-- **机械扩展**：`zwcad_mech_manage_title_block` 管理标题栏，`zwcad_mech_manage_frame` / `zwcad_mech_create_frame` 查询、切换和创建图框，`zwcad_mech_manage_bom` / `zwcad_mech_create_partlist` 管理和创建明细表，其他工具用于机械数据库、机械文档、标准环境、球标等操作。
-- **扩展数据与 CAD 工具**：`zwcad_manage_dictionary` 管理命名对象字典和 XRecord，`zwcad_manage_xdata` 读写实体扩展数据，`zwcad_manage_utility` 执行坐标转换、极坐标、角度和距离等 CAD 通用计算。
+- **绘图**
+  - `zwcad_draw_entity`（3 / 2）：创建单个二维实体。
+  - `zwcad_draw_batch`（2 / 1）：批量创建多个实体。
+  - `zwcad_draw_3d_solid`（3 / 2）：创建基础三维实体。
+- **注释与标注**
+  - `zwcad_add_annotation`（3 / 2）：添加文字、引线、填充等注释。
+  - `zwcad_add_dimension`（3 / 2）：创建尺寸标注。
+  - `zwcad_insert_block`（9 / 3）：插入图块引用。
+- **实体查询与修改**
+  - `zwcad_find_object`（4 / 0）：按条件或句柄定位实体。
+  - `zwcad_get_objects_in_model`（2 / 0）：获取模型空间对象。
+  - `zwcad_get_entity_info`（4 / 0）：读取实体详情。
+  - `zwcad_set_entity_properties`（10 / 0）：修改图层、颜色、线型等通用属性。
+  - `zwcad_transform_entity`（6 / 2）：执行复制、移动、旋转、镜像、缩放、删除和阵列。
+  - `zwcad_modify_entity`（6 / 2）：修改实体几何属性。
+- **尺寸查询**
+  - `zwcad_query_dimensions`（2 / 0）：批量读取尺寸值、公差、标注文字和样式等信息。
+- **样式与视图**
+  - `zwcad_manage_style`（4 / 2）：管理图层、线型、文字样式和标注样式。
+  - `zwcad_manage_view`（3 / 1）：管理布局与视图。
+  - `zwcad_zoom`（2 / 1）：控制当前视图范围。
+- **文档、表格、选择集和图块**
+  - `zwcad_manage_document`（2 / 1）：管理图纸生命周期、保存、导入导出和打印。
+  - `zwcad_manage_table`（6 / 2）：操作 CAD 表格。
+  - `zwcad_select_entities`（2 / 1）：创建和管理选择集。
+  - `zwcad_manage_block`（7 / 1）：管理图块定义及属性。
+- **系统与诊断**
+  - `zwcad_get_variable`（1 / 1）：读取系统变量。
+  - `zwcad_set_variable`（2 / 2）：写入系统变量。
+  - `zwcad_get_app_info`（1 / 0）：获取 CAD 和机械环境信息。
+  - `zwcad_get_capabilities`（1 / 0）：查看当前产品、连接和工具能力。
+  - `zwcad_diagnose`（1 / 0）：诊断平台连接。
+  - `zwcad_mech_diagnose`（0 / 0）：诊断机械扩展和类型库。
+- **机械扩展**
+  - `zwcad_mech_manage_title_block`（2 / 1）：管理标题栏。
+  - `zwcad_mech_manage_frame`（2 / 1）：查询、切换和刷新图框。
+  - `zwcad_mech_create_frame`（19 / 0）：创建图框及其标题栏、附加栏等配置。
+  - `zwcad_mech_manage_bom`（2 / 1）：管理明细表数据。
+  - `zwcad_mech_create_partlist`（0 / 0）：创建明细表实体。
+  - `zwcad_mech_manage_db`（2 / 1）：管理机械数据库。
+  - `zwcad_mech_doc`（3 / 2）：管理机械文档。
+  - `zwcad_mech_cad_environment_init`（1 / 1）：初始化机械 CAD 标准环境。
+  - `zwcad_mech_get_balloon`（1 / 0）：读取球标信息。
+  - `zwcad_mech_insert_balloon`（10 / 0）：插入球标。
+- **扩展数据与 CAD 工具**
+  - `zwcad_manage_dictionary`（2 / 1）：管理命名对象字典和 XRecord。
+  - `zwcad_manage_xdata`（2 / 1）：读写实体扩展数据。
+  - `zwcad_manage_utility`（2 / 1）：执行坐标转换、极坐标、角度和距离等 CAD 通用计算。
 
 当用户提出能力需求时，先从上述索引定位工具，再读取该工具的运行时 schema；如果工具未出现在 `tools/list` 中，才判断当前服务版本不具备该能力。
 
