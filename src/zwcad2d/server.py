@@ -1,32 +1,21 @@
-"""ZWCAD Platform MCP Server.
+﻿"""
+ZWCAD-2D MCP Server
 
-通过 MCP stdio 协议向 WorkBuddy 等客户端提供 ZWCAD 自动化工具。
+一个 MCP 入口同时提供 ZWCAD 平台能力与可选的中望机械能力。
 """
 
-import json
-import logging
 import math
-import os
 import sys
-
+import os
+import logging
+import importlib.util
 import pythoncom
-from fastmcp import FastMCP
-
-# ZWCAD 2025 的部分类型库包含无法用系统 ANSI 代码页表示的接口说明。
-# comtypes 默认把生成的包装模块写成 mbcs 编码文件，稍后导入时可能触发
-# UnicodeDecodeError。改为内存生成可以绕过磁盘包装文件的编码过程。
-import comtypes.client
-comtypes.client.gen_dir = None
-
-from pyzwcad import APoint, ZwCAD
-from pyzwcad.types import aDouble, aInt
-
-from hatch_info import extract_hatch_loops
+import xml.etree.ElementTree as ET
 
 logging.basicConfig(
     stream=sys.stderr,
     level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s: %(message)s",
+    format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -35,30 +24,205 @@ try:
 except Exception:
     pass
 
-mcp = FastMCP(name="ZWCAD Platform Server")
+from fastmcp import FastMCP
+
+# 先让普通 ZWCAD COM 包装仅在内存中生成，避免某些中文版类型库触发
+# comtypes 的 mbcs 磁盘缓存解码错误。机械扩展在真正需要时延迟加载。
+ZWM_TYPELIB_GUID = "{2F671C10-669F-11E7-91B7-BC5FF42AC839}"
+try:
+    import comtypes.client
+    comtypes.client.gen_dir = None
+except Exception:
+    pass
+
+ZwCADMech = None
+_MECH_IMPORT_ATTEMPTED = False
+_MECH_IMPORT_ERROR = None
+
+
+def _load_mechanical_class():
+    """延迟加载机械类型库，普通 ZWCAD 会话无需触碰机械 COM。"""
+    global ZwCADMech, _MECH_IMPORT_ATTEMPTED, _MECH_IMPORT_ERROR
+    if _MECH_IMPORT_ATTEMPTED:
+        return ZwCADMech
+    _MECH_IMPORT_ATTEMPTED = True
+    try:
+        try:
+            comtypes.client.GetModule((ZWM_TYPELIB_GUID, 1, 0))
+            logger.info("预加载 ZwmToolKit 类型库成功 (GUID=%s)", ZWM_TYPELIB_GUID)
+        except Exception as typelib_exc:
+            logger.info("机械类型库将使用 pyzwcadmech 回退策略: %s", typelib_exc)
+        from pyzwcadmech import ZwCADMech as mechanical_class
+        ZwCADMech = mechanical_class
+        _MECH_IMPORT_ERROR = None
+    except Exception as mech_import_exc:
+        _MECH_IMPORT_ERROR = str(mech_import_exc)
+        logger.warning("机械扩展未加载，平台工具仍可使用: %s", mech_import_exc)
+    finally:
+        try:
+            comtypes.client.gen_dir = None
+        except Exception:
+            pass
+    return ZwCADMech
+
+from pyzwcad import ZwCAD, APoint
+from pyzwcad.types import aDouble, aInt
+from .hatch_info import extract_hatch_loops
+
+mcp = FastMCP(name="ZWCAD-2D MCP Server")
+
+_styles_base_path_cache = None
+
+
+_DEFAULT_STYLES_BASE_PATH = r"C:\Users\Public\Documents\ZWSoft\zwcadm\2026\zh-CN\styles"
+
+
+def _get_styles_base_path() -> str:
+    """从运行中的 ZWCAD 机械模块 get_style_path 解析样式目录（…/<lang>/styles）。
+    找不到目录时回退到默认 zh-CN styles 路径。"""
+    global _styles_base_path_cache
+    if _styles_base_path_cache:
+        return _styles_base_path_cache
+
+    styles_dir = None
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        style_path = mech_conn.zwm_app.get_style_path()
+        if style_path:
+            style_path = os.path.normpath(style_path.rstrip("\\/"))
+            # get_style_path 通常返回 …/zwcadm/<year>/<lang>/，样式 XML 在 styles 子目录
+            if os.path.basename(style_path).lower() == "styles":
+                styles_dir = style_path
+            else:
+                styles_dir = os.path.join(style_path, "styles")
+    except Exception as e:
+        logger.warning("解析样式目录失败，将使用默认路径: %s", e)
+
+    if not styles_dir or not os.path.isdir(styles_dir):
+        logger.warning(
+            "样式目录不存在: %s，使用默认路径: %s",
+            styles_dir, _DEFAULT_STYLES_BASE_PATH,
+        )
+        styles_dir = _DEFAULT_STYLES_BASE_PATH
+
+    _styles_base_path_cache = styles_dir
+    return styles_dir
+
+
+def _parse_xml_file(file_path):
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"XML 文件不存在: {file_path}")
+    tree = ET.parse(file_path)
+    return tree.getroot()
+
+
+def _get_default_standard():
+    xml_path = os.path.join(_get_styles_base_path(), "standard.xml")
+    root = _parse_xml_file(xml_path)
+    for standard in root.findall('Standard'):
+        if standard.get('Default') == '1':
+            return standard.get('Name')
+    first = root.find('Standard')
+    return first.get('Name') if first is not None else "GB"
+
+
+def _get_title_styles(standard_name):
+    xml_path = os.path.join(_get_styles_base_path(), standard_name, "TitleStyles.xml")
+    root = _parse_xml_file(xml_path)
+    styles = []
+    default_style = None
+    for style in root.iter():
+        if style.tag.endswith('TitleStyle') or style.tag == 'TitleStyle':
+            name = style.get('Name')
+            if name:
+                is_default = style.get('Default') == '1'
+                styles.append(name)
+                if is_default:
+                    default_style = name
+    return styles, default_style or (styles[0] if styles else None)
+
+
+def _get_bom_styles(standard_name):
+    xml_path = os.path.join(_get_styles_base_path(), standard_name, "BomStyles.xml")
+    root = _parse_xml_file(xml_path)
+    styles = []
+    default_style = None
+    for style in root.iter():
+        if style.tag.endswith('BomStyle') or style.tag == 'BomStyle':
+            name = style.get('Name')
+            if name:
+                is_default = style.get('Default') == '1'
+                styles.append(name)
+                if is_default:
+                    default_style = name
+    return styles, default_style or (styles[0] if styles else None)
+
+
+def _get_frame_styles(standard_name, frame_size, orientation):
+    xml_path = os.path.join(_get_styles_base_path(), standard_name, "FrameStyles.xml")
+    root = _parse_xml_file(xml_path)
+    for frame_size_elem in root.findall('.//FrameSize'):
+        if frame_size_elem.get('Name') == frame_size:
+            for style in frame_size_elem.findall('.//FrameStyle'):
+                if style.get('Orientation') == orientation:
+                    return style.get('Name')
+    return "分区图框"
+
+
+def _get_default_frame_size(standard_name):
+    xml_path = os.path.join(_get_styles_base_path(), standard_name, "FrameStyles.xml")
+    root = _parse_xml_file(xml_path)
+    for frame_size_elem in root.iter():
+        if frame_size_elem.tag.endswith('FrameSize') or frame_size_elem.tag == 'FrameSize':
+            if frame_size_elem.get('Default') == '1':
+                return frame_size_elem.get('Name')
+    for frame_size_elem in root.iter():
+        if frame_size_elem.tag.endswith('FrameSize') or frame_size_elem.tag == 'FrameSize':
+            return frame_size_elem.get('Name')
+    return "A3"
+
+
 _cad_conn_cache = None
 
 
-def get_cad_connection():
-    """连接已运行的 ZWCAD，并缓存健康的 COM 代理。"""
+def get_cad_connection(require_mechanical: bool = False):
     global _cad_conn_cache
     if _cad_conn_cache is not None:
         try:
-            _ = _cad_conn_cache.model.Count
-            return _cad_conn_cache, None
+            # 健康检查：确认缓存的 zcad_conn 仍可访问 ModelSpace。
+            # comtypes 的 ZWCAD.Application 代理在长期运行后会失效
+            # (CO_E_OBJNOTCONNECTED -2147220995)，导致 doc/model 不可用，
+            # 表现为绘图类工具报“对象没有连接到服务器”而应用层工具仍正常。
+            _ = _cad_conn_cache[0].model.Count
+            if require_mechanical and _cad_conn_cache[1] is None:
+                mechanical_class = _load_mechanical_class()
+                if mechanical_class is not None:
+                    _cad_conn_cache = (_cad_conn_cache[0], mechanical_class())
+            return _cad_conn_cache
         except Exception:
             _cad_conn_cache = None
     try:
         pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
     except Exception:
         pass
-    _cad_conn_cache = ZwCAD()
-    return _cad_conn_cache, None
+    zcad_conn = ZwCAD()
+    mech_conn = None
+    mechanical_class = _load_mechanical_class() if require_mechanical else None
+    if mechanical_class is not None:
+        try:
+            mech_conn = mechanical_class()
+        except Exception as exc:
+            # 普通 ZWCAD 环境没有机械模块时，平台工具仍应保持可用。
+            logger.info("未连接机械扩展，继续提供平台工具: %s", exc)
+    _cad_conn_cache = (zcad_conn, mech_conn)
+    return _cad_conn_cache
 
 
 def reset_cad_connection():
-    global _cad_conn_cache
+    """清除连接缓存，下次 get_cad_connection 将创建新连接。"""
+    global _cad_conn_cache, _styles_base_path_cache
     _cad_conn_cache = None
+    _styles_base_path_cache = None
 
 
 def _ok(message: str = None, **data) -> dict:
@@ -67,20 +231,66 @@ def _ok(message: str = None, **data) -> dict:
     return data
 
 
-def _err(action: str, error: Exception) -> dict:
-    error_text = str(error)
-    is_com_init = "CoInitialize" in error_text or "-2147221008" in error_text
-    disconnected = "-2147220995" in error_text or "没有连接到服务器" in error_text
-    logger.error("tool_error action=%s error=%s", action, error_text)
-    if disconnected:
-        reset_cad_connection()
-    result = {
-        "error": f"{action}失败: {error_text}",
-        "code": "COM_INIT_ERROR" if is_com_init else "CAD_DISCONNECTED" if disconnected else "OPERATION_ERROR",
-    }
-    if is_com_init or disconnected:
-        result["hint"] = "请确认 ZWCAD 已启动并打开 DWG；必要时重启 ZWCAD 和 MCP Server。"
+def _typelib_state(load: bool = False):
+    """返回 (loaded, source, error)：ZwmToolKit 类型库加载状态。"""
+    if load:
+        _load_mechanical_class()
+    if not _MECH_IMPORT_ATTEMPTED:
+        return False, None, "not_probed"
+    if ZwCADMech is None:
+        return False, None, _MECH_IMPORT_ERROR or "mechanical package unavailable"
+    try:
+        from pyzwcadmech import api as _zwm_api
+        loaded = getattr(_zwm_api, "ZWM", None) is not None
+        source = getattr(_zwm_api, "TYPELIB_SOURCE", None)
+        if source is None and loaded:
+            source = getattr(_zwm_api, "tlb_path", None) or getattr(_zwm_api, "found_tlb", None) or "loaded"
+        tlb_err = getattr(_zwm_api, "TYPELIB_ERROR", None)
+        return loaded, source, tlb_err
+    except Exception as exc:
+        return False, None, str(exc)
+
+
+def _require_typelib(action: str):
+    """检查 ZwmToolKit 类型库是否已加载，未加载则返回错误 dict，否则返回 None。"""
+    loaded, source, tlb_err = _typelib_state(load=True)
+    if not loaded:
+        hint_parts = [
+            "ZwmToolKit 类型库未加载，标题栏/明细表/图框等机械接口不可用。",
+            "修复方法: 1) 确认中望机械已安装并启动; "
+            "2) 设置环境变量 PYZWCADMECH_TLB_PATH 指向 ZwmToolKit.tlb; "
+            "3) 调用 zwcad_mech_diagnose 排查; 4) 重启 MCP Server。",
+        ]
+        if tlb_err:
+            hint_parts.append(f"错误详情: {tlb_err}")
+        return {"error": f"{action}失败: ZwmToolKit 类型库未加载", "code": "TYPELIB_NOT_LOADED", "hint": " ".join(hint_parts)}
+    return None
+
+
+def _err(action: str, e: Exception) -> dict:
+    err_str = str(e)
+    is_com = "CoInitialize" in err_str or "-2147221008" in err_str
+    is_mechanical_action = "mech_" in action.lower() or any(token in action for token in (
+        "机械", "标题栏", "图框", "明细表", "BOM", "球标", "CAD环境", "机械文档",
+    ))
+    logger.error("tool_error action=%s error=%s", action, err_str)
+    result = {"error": f"{action}失败: {err_str}", "code": "COM_INIT_ERROR" if is_com else "OPERATION_ERROR"}
+    hints = []
+    if is_com:
+        hints.append("确保目标 ZWCAD 产品已启动并打开 DWG；重启产品和 MCP；检查 pywin32/comtypes。")
+    if is_mechanical_action:
+        if _MECH_IMPORT_ERROR:
+            result["code"] = "MECHANICAL_NOT_AVAILABLE"
+            hints.append(f"机械 Python 扩展未加载: {_MECH_IMPORT_ERROR}")
+        _tlb_loaded, _tlb_src, _tlb_err = _typelib_state(load=True)
+        if not _tlb_loaded:
+            hints.append(
+                "ZwmToolKit 类型库未加载；可设置 PYZWCADMECH_TLB_PATH 后重启 MCP。"
+            )
+    if hints:
+        result["hint"] = "; ".join(hints)
     return result
+
 
 def _find_entity(zcad_conn, object_type: str = None,
                  property_name: str = None, property_value: str = None,
@@ -185,7 +395,7 @@ _PROP_FILTER_MAP = {
 
 
 def _build_locate_filter(object_type, property_name, property_value):
-    """为定位查询（find_object/get_entity_info 等）构建 DXF 选择过滤器。
+    """为定位查询（zwcad_find_object/zwcad_get_entity_info 等）构建 DXF 选择过滤器。
     返回 (FilterType, FilterData)，无可用条件返回 (None, None)。
     若指定了类型但无法映射为 DXF 名，则整体放弃原生过滤（避免忽略类型条件）。"""
     dxf_type = _normalize_entity_type(object_type)
@@ -876,7 +1086,7 @@ _MODIFY_DISPATCH = {
 
 
 @mcp.tool
-def draw_entity(entity_type: str, params: dict, layer: str = "0") -> dict:
+def zwcad_draw_entity(entity_type: str, params: dict, layer: str = "0") -> dict:
     """绘制2D实体。entity_type及params([]=可选):
     line:{x1,y1,x2,y2,[z1,z2]} | circle:{center_x,center_y,radius,[center_z]}
     arc:{center_x,center_y,radius,start_angle,end_angle}(弧度)
@@ -885,7 +1095,7 @@ def draw_entity(entity_type: str, params: dict, layer: str = "0") -> dict:
     spline:{fit_points:[[x,y,z],...]} | point:{x,y,[z]}
     ray/xline:{x1,y1,x2,y2} | mline/3d_polyline:{vertices:[[x,y,z],...]}"""
     try:
-        logger.info("tool_call draw_entity type=%s layer=%s", entity_type, layer)
+        logger.info("tool_call zwcad_draw_entity type=%s layer=%s", entity_type, layer)
         zcad_conn, _ = get_cad_connection()
         fn = _DRAW_DISPATCH.get(entity_type)
         if not fn:
@@ -900,11 +1110,11 @@ def draw_entity(entity_type: str, params: dict, layer: str = "0") -> dict:
 
 
 @mcp.tool
-def draw_batch(entities: list, layer: str = "0") -> dict:
+def zwcad_draw_batch(entities: list, layer: str = "0") -> dict:
     """批量绘制多个实体，减少交互轮次。entities为dict列表，每个dict含entity_type和params，可选layer。
     示例: [{"entity_type":"line","params":{"x1":0,"y1":0,"x2":10,"y2":10}},{"entity_type":"circle","params":{"center_x":5,"center_y":5,"radius":3}}]"""
     try:
-        logger.info("tool_call draw_batch count=%d", len(entities))
+        logger.info("tool_call zwcad_draw_batch count=%d", len(entities))
         zcad_conn, _ = get_cad_connection()
         results = []
         for i, e in enumerate(entities):
@@ -932,7 +1142,7 @@ def draw_batch(entities: list, layer: str = "0") -> dict:
 
 
 @mcp.tool
-def draw_3d_solid(solid_type: str, params: dict, layer: str = "0") -> dict:
+def zwcad_draw_3d_solid(solid_type: str, params: dict, layer: str = "0") -> dict:
     """绘制3D实体。solid_type及params([]=可选):
     box:{origin_x,origin_y,origin_z,length,width,height}
     cylinder:{center_x,center_y,center_z,radius,height}
@@ -956,7 +1166,7 @@ def draw_3d_solid(solid_type: str, params: dict, layer: str = "0") -> dict:
 
 
 @mcp.tool
-def add_annotation(annotation_type: str, params: dict, layer: str = "0") -> dict:
+def zwcad_add_annotation(annotation_type: str, params: dict, layer: str = "0") -> dict:
     """添加注释对象。annotation_type及params([]=可选):
     text:{text,x,y,[z,height]} | mtext:{text,x,y,[z,width,height]}
     leader:{points:[[x,y,z],...]，[annotation_type:0/1/2]}
@@ -979,7 +1189,7 @@ def add_annotation(annotation_type: str, params: dict, layer: str = "0") -> dict
 
 
 @mcp.tool
-def add_dimension(dim_type: str, params: dict, layer: str = "0") -> dict:
+def zwcad_add_dimension(dim_type: str, params: dict, layer: str = "0") -> dict:
     """添加标注。dim_type及params(z坐标均可选):
     aligned:{x1,y1,x2,y2,text_x,text_y}
     rotated:{x1,y1,x2,y2,text_x,text_y,rotation_angle}
@@ -1113,7 +1323,7 @@ def _read_dimension(obj, full=False):
 
 
 @mcp.tool
-def query_dimensions(detail: str = "summary", layer: str = None) -> dict:
+def zwcad_query_dimensions(detail: str = "summary", layer: str = None) -> dict:
     """快速查询当前图纸中所有标注(尺寸)信息。
     优先使用原生 DXF 选择过滤器，
     过滤失败时回退到 iter_objects 子串匹配。
@@ -1129,7 +1339,7 @@ def query_dimensions(detail: str = "summary", layer: str = None) -> dict:
             text_override/text_string/style_name 等(full 模式额外含公差与几何信息)
     """
     try:
-        logger.info("tool_call query_dimensions detail=%s layer=%s", detail, layer)
+        logger.info("tool_call zwcad_query_dimensions detail=%s layer=%s", detail, layer)
         zcad_conn, _ = get_cad_connection()
         full = (detail == "full")
 
@@ -1175,7 +1385,7 @@ def query_dimensions(detail: str = "summary", layer: str = None) -> dict:
 
 
 @mcp.tool
-def insert_block(block_name: str, x: float, y: float, z: float = 0,
+def zwcad_insert_block(block_name: str, x: float, y: float, z: float = 0,
                  x_scale: float = 1.0, y_scale: float = 1.0, z_scale: float = 1.0,
                  rotation: float = 0, layer: str = "0") -> dict:
     """在指定位置插入图块。rotation为弧度。"""
@@ -1190,7 +1400,7 @@ def insert_block(block_name: str, x: float, y: float, z: float = 0,
 
 
 @mcp.tool
-def transform_entity(action: str, params: dict,
+def zwcad_transform_entity(action: str, params: dict,
                      object_type: str = None, property_name: str = None,
                      property_value: str = None, handle: str = None) -> dict:
     """对实体执行变换操作。通过handle(优先)或object_type+property_name+property_value定位实体。
@@ -1201,7 +1411,7 @@ def transform_entity(action: str, params: dict,
     array_polar:{center_x,center_y,count,[fill_angle]}
     array_rectangular:{num_rows,num_cols,row_spacing,col_spacing}"""
     try:
-        logger.info("tool_call transform_entity action=%s handle=%s", action, handle)
+        logger.info("tool_call zwcad_transform_entity action=%s handle=%s", action, handle)
         zcad_conn, _ = get_cad_connection()
         obj = _find_entity(zcad_conn, object_type=object_type,
                            property_name=property_name, property_value=property_value,
@@ -1221,7 +1431,7 @@ def transform_entity(action: str, params: dict,
 
 
 @mcp.tool
-def modify_entity(entity_type: str, params: dict,
+def zwcad_modify_entity(entity_type: str, params: dict,
                   object_type: str = None, property_name: str = None,
                   property_value: str = None, handle: str = None) -> dict:
     """修改实体几何属性。定位参数同transform_entity。entity_type及params(均可选除特别说明):
@@ -1234,7 +1444,7 @@ def modify_entity(entity_type: str, params: dict,
     tolerance_height_scale,fit_symbol,fit_stacked,fit_height_scale,text_prefix/suffix/override}(均同add_dimension的公差/配合参数)
     offset:{distance}(必需) | explode:{}"""
     try:
-        logger.info("tool_call modify_entity type=%s handle=%s", entity_type, handle)
+        logger.info("tool_call zwcad_modify_entity type=%s handle=%s", entity_type, handle)
         zcad_conn, _ = get_cad_connection()
         if entity_type == "offset":
             obj = _find_entity(zcad_conn, object_type=object_type,
@@ -1278,11 +1488,11 @@ def modify_entity(entity_type: str, params: dict,
 
 
 @mcp.tool
-def get_entity_info(handle: str = None, object_type: str = None,
+def zwcad_get_entity_info(handle: str = None, object_type: str = None,
                     property_name: str = None, property_value: str = None) -> dict:
     """获取实体详细信息（属性、几何数据、边界框）。定位参数同transform_entity。"""
     try:
-        logger.info("tool_call get_entity_info handle=%s", handle)
+        logger.info("tool_call zwcad_get_entity_info handle=%s", handle)
         zcad_conn, _ = get_cad_connection()
         if handle and not object_type and not property_name:
             try:
@@ -1347,7 +1557,7 @@ def get_entity_info(handle: str = None, object_type: str = None,
 
 
 @mcp.tool
-def set_entity_properties(layer: str = None, color: int = None,
+def zwcad_set_entity_properties(layer: str = None, color: int = None,
                           linetype: str = None, linetype_scale: float = None,
                           lineweight: float = None, visible: bool = None,
                           object_type: str = None, property_name: str = "Layer",
@@ -1379,7 +1589,7 @@ def set_entity_properties(layer: str = None, color: int = None,
 
 
 @mcp.tool
-def find_object(object_type: str = None, property_name: str = None,
+def zwcad_find_object(object_type: str = None, property_name: str = None,
                 property_value: str = None, handle: str = None) -> dict:
     """查找符合条件的第一个对象。定位参数同transform_entity。
     优先 handle(O(1)) > 原生DXF过滤 > 类型预过滤+小批量谓词。结果回传handle便于后续直接定位。"""
@@ -1402,7 +1612,7 @@ def find_object(object_type: str = None, property_name: str = None,
 
 
 @mcp.tool
-def get_objects_in_model(object_type: str = None, limit: int = 500) -> dict:
+def zwcad_get_objects_in_model(object_type: str = None, limit: int = 500) -> dict:
     """获取模型空间中的对象列表。object_type可选过滤，limit默认500。
     优先使用原生 DXF 选择过滤器；类型不可映射时回退迭代。"""
     try:
@@ -1418,8 +1628,8 @@ def get_objects_in_model(object_type: str = None, limit: int = 500) -> dict:
                 return _ok(total_count=len(objects),
                            truncated=(total > len(objects)), data=objects)
             return _ok(total_count=0, truncated=False, data=[])
-        # 未指定类型时直接按索引枚举模型空间。每个对象独立容错，避免一个异常
-        # 字符串或损坏代理导致整批查询失败。
+        # 未指定类型时直接按索引枚举模型空间。每个对象独立容错，避免一个
+        # 异常字符串或损坏代理导致整批查询失败。
         model = zcad_conn.model
         model_count = int(model.Count)
         scan_count = model_count if limit is None else min(model_count, max(0, limit))
@@ -1448,7 +1658,7 @@ def get_objects_in_model(object_type: str = None, limit: int = 500) -> dict:
 
 
 @mcp.tool
-def zoom(mode: str, params: dict = None) -> dict:
+def zwcad_zoom(mode: str, params: dict = None) -> dict:
     """视图缩放。mode: extents|all|previous(无需params),
     window:{x1,y1,x2,y2}, center:{center_x,center_y,[magnify]},
     scale:{scale,[scale_type:0全图/1当前]}"""
@@ -1478,7 +1688,7 @@ def zoom(mode: str, params: dict = None) -> dict:
 
 
 @mcp.tool
-def manage_style(style_type: str, action: str, name: str = None,
+def zwcad_manage_style(style_type: str, action: str, name: str = None,
                  properties: dict = None) -> dict:
     """管理图层/线型/文字样式/标注样式。style_type: layer|linetype|textstyle|dimstyle
     action: list|add|set_active|set_properties。properties按style_type不同:
@@ -1486,7 +1696,7 @@ def manage_style(style_type: str, action: str, name: str = None,
     textstyle: {font_file,big_font_file,height,width,oblique_angle}
     linetype add: {filename}(默认acad.lin)"""
     try:
-        logger.info("tool_call manage_style type=%s action=%s name=%s", style_type, action, name)
+        logger.info("tool_call zwcad_manage_style type=%s action=%s name=%s", style_type, action, name)
         zcad_conn, _ = get_cad_connection()
         props = properties or {}
 
@@ -1599,7 +1809,7 @@ def manage_style(style_type: str, action: str, name: str = None,
 
 
 @mcp.tool
-def manage_view(action: str, name: str = None, params: dict = None) -> dict:
+def zwcad_manage_view(action: str, name: str = None, params: dict = None) -> dict:
     """管理布局和视图。action: list_layouts|get_active_layout|add_layout|set_active_layout|list_views|add_view
     |set_active_space|get_active_space。
     add/set_active/需要name参数。
@@ -1667,7 +1877,7 @@ def manage_view(action: str, name: str = None, params: dict = None) -> dict:
 
 
 @mcp.tool
-def manage_document(action: str, params: dict = None) -> dict:
+def zwcad_manage_document(action: str, params: dict = None) -> dict:
     """文档管理。action及params:
     new(无需params) | save:{file_path} | close:{[save_changes]}
     info/list(无需params) | activate:{name}
@@ -1677,7 +1887,7 @@ def manage_document(action: str, params: dict = None) -> dict:
     start_undo/end_undo(无需params)
     wblock:{file_name,[selection_set_name]}"""
     try:
-        logger.info("tool_call manage_document action=%s", action)
+        logger.info("tool_call zwcad_manage_document action=%s", action)
         zcad_conn, _ = get_cad_connection()
         p = params or {}
 
@@ -1776,7 +1986,7 @@ def manage_document(action: str, params: dict = None) -> dict:
 
 
 @mcp.tool
-def manage_table(action: str, params: dict,
+def zwcad_manage_table(action: str, params: dict,
                  object_type: str = None, property_name: str = None,
                  property_value: str = None, handle: str = None) -> dict:
     """操作CAD表格对象。定位参数同transform_entity。action及params:
@@ -1918,7 +2128,7 @@ def _read_pickfirst_selection(zcad_conn, max_items=500):
 
 
 @mcp.tool
-def select_entities(action: str, params: dict = None) -> dict:
+def zwcad_select_entities(action: str, params: dict = None) -> dict:
     """选择集操作。action及params:
     select:{mode}(0=Window/1=Crossing需{x1,y1,x2,y2},2=Previous/4=Last/5=All无需坐标,[name,filter,return_items])
     by_polygon:{mode(0=Fence/1=WinPoly/2=CrossPoly),points,[name,filter,return_items]}
@@ -1927,7 +2137,7 @@ def select_entities(action: str, params: dict = None) -> dict:
     filter字段(原生DXF过滤,支持多条件组合): {entity_type,dimstyle,layer,color,linetype,textstyle,block_name,visible,space}
     entity_type支持LINE/CIRCLE/TEXT等标准名或AcDb前缀(自动归一化)"""
     try:
-        logger.info("tool_call select_entities action=%s", action)
+        logger.info("tool_call zwcad_select_entities action=%s", action)
         zcad_conn, _ = get_cad_connection()
         p = params or {}
 
@@ -2030,7 +2240,7 @@ def select_entities(action: str, params: dict = None) -> dict:
 
 
 @mcp.tool
-def manage_block(action: str, name: str = None, params: dict = None,
+def zwcad_manage_block(action: str, name: str = None, params: dict = None,
                  object_type: str = None, property_name: str = None,
                  property_value: str = None, handle: str = None) -> dict:
     """图块管理。action: list|info(需name)|create(需name,[x,y,z])|get_attributes(定位参数同transform_entity)。"""
@@ -2090,7 +2300,7 @@ def manage_block(action: str, name: str = None, params: dict = None,
 
 
 @mcp.tool
-def get_variable(name: str) -> dict:
+def zwcad_get_variable(name: str) -> dict:
     """获取系统变量值（如DIMSCALE, LTSCALE, OSMODE等）。"""
     try:
         zcad_conn, _ = get_cad_connection()
@@ -2101,7 +2311,7 @@ def get_variable(name: str) -> dict:
 
 
 @mcp.tool
-def set_variable(name: str, value) -> dict:
+def zwcad_set_variable(name: str, value) -> dict:
     """设置系统变量值。"""
     try:
         zcad_conn, _ = get_cad_connection()
@@ -2112,22 +2322,617 @@ def set_variable(name: str, value) -> dict:
 
 
 @mcp.tool
-def get_app_info() -> dict:
-    """获取当前 ZWCAD 平台信息（版本、路径、窗口状态等）。"""
+def zwcad_get_app_info(scope: str = "cad") -> dict:
+    """获取应用信息。scope: cad(ZWCAD版本/路径/窗口)|mech_version|mech_cad_path|mech_zwm_path|mech_style_path|mech_about"""
+    try:
+        zcad_conn, mech_conn = get_cad_connection(require_mechanical=scope.startswith("mech_"))
+        if scope == "cad":
+            app = zcad_conn.app
+            info = {}
+            for prop in ['Version', 'Name', 'Path', 'FullName', 'Caption',
+                          'WindowState', 'Visible', 'Width', 'Height']:
+                if hasattr(app, prop):
+                    try:
+                        info[prop.lower()] = getattr(app, prop)
+                    except Exception:
+                        pass
+            return _ok(data=info)
+        if scope.startswith("mech_") and mech_conn is None:
+            return {
+                "error": "当前 ZWCAD 实例未连接机械扩展",
+                "code": "MECHANICAL_NOT_AVAILABLE",
+                "hint": "请确认启动的是中望机械，并调用 zwcad_mech_diagnose 检查 ZwmToolKit。",
+            }
+        elif scope == "mech_version":
+            return _ok(version=mech_conn.zwm_app.get_version())
+        elif scope == "mech_cad_path":
+            return _ok(path=mech_conn.zwm_app.get_cad_path())
+        elif scope == "mech_zwm_path":
+            return _ok(path=mech_conn.zwm_app.get_zwm_path())
+        elif scope == "mech_style_path":
+            return _ok(path=mech_conn.zwm_app.get_style_path())
+        elif scope == "mech_about":
+            return _ok(about=mech_conn.zwm_app.get_about())
+        return _err("获取信息", ValueError(f"不支持的scope: {scope}"))
+    except Exception as e:
+        return _err(f"获取应用信息({scope})", e)
+
+
+@mcp.tool
+def zwcad_mech_diagnose() -> dict:
+    """诊断机械模块连接与 ZwmToolKit 类型库加载状态。
+
+    逐项探测：类型库加载、ZWCAD 应用、ZwmApp、ZwmDb、标题栏获取(依赖类型库)，返回各探测项状态与修复建议。
+    """
+    result = {}
+
+    loaded, source, tlb_err = _typelib_state(load=True)
+    result["typelib_loaded"] = loaded
+    result["typelib_source"] = source
+    if tlb_err:
+        result["typelib_error"] = str(tlb_err)
+
+    reset_cad_connection()
+    try:
+        zcad_conn, mech_conn = get_cad_connection(require_mechanical=True)
+    except Exception as e:
+        result["cad_connection_ok"] = False
+        result["cad_connection_error"] = str(e)
+        return _ok("诊断完成(连接建立失败)", **result)
+
+    if mech_conn is None:
+        result["cad_connection_ok"] = True
+        result["mechanical_connection_ok"] = False
+        result["mechanical_import_error"] = _MECH_IMPORT_ERROR
+        result["hint"] = "平台连接正常，但当前未连接中望机械扩展。"
+        return _ok("诊断完成(机械扩展不可用)", **result)
+
+    try:
+        _ = mech_conn.app
+        result["cad_app_ok"] = True
+    except Exception as e:
+        result["cad_app_ok"] = False
+        result["cad_app_error"] = str(e)
+
+    try:
+        _ = mech_conn.zwm_app
+        result["zwm_app_ok"] = True
+    except Exception as e:
+        result["zwm_app_ok"] = False
+        result["zwm_app_error"] = str(e)
+
+    try:
+        mech_conn.open_file("")
+        result["zwm_db_ok"] = True
+    except Exception as e:
+        result["zwm_db_ok"] = False
+        result["zwm_db_error"] = str(e)
+
+    if result.get("zwm_db_ok"):
+        try:
+            title = mech_conn.get_title()
+            result["title_probe_ok"] = title is not None
+        except Exception as e:
+            result["title_probe_ok"] = False
+            result["title_probe_error"] = str(e)
+
+    if not loaded:
+        result["hint"] = (
+            "ZwmToolKit 类型库未加载，标题栏/明细表/图框等机械接口不可用。"
+            "修复方法：1) 确认中望机械已正常安装；"
+            "2) 设置环境变量 PYZWCADMECH_TLB_PATH 指向 ZwmToolKit.tlb "
+            "(如 C:\\Program Files\\ZWSOFT\\ZWCAD Mechanical 2026 Chs\\Zwcadm\\ZwmToolKit.tlb)；"
+            "3) 调用 zwcad_mech_diagnose 重新排查（已自动重置连接缓存）；4) 重启 MCP Server。"
+        )
+    return _ok("诊断完成", **result)
+
+
+# ############################################################
+#                   中望机械特有工具（合并后）
+# ############################################################
+
+
+@mcp.tool
+def zwcad_mech_manage_title_block(action: str, params: dict = None) -> dict:
+    """标题栏管理。action: get_info|get_field_count(无需params),
+    set_field:{field_name,value} | update_batch:{fields:{name:val,...}}
+    get_field_by_index:{index}"""
+    try:
+        _tlb_err = _require_typelib("标题栏管理")
+        if _tlb_err:
+            return _tlb_err
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.open_file("")
+        title = mech_conn.get_title()
+        p = params or {}
+
+        if not title:
+            return _err("标题栏操作", ValueError("未找到标题栏对象"))
+
+        if action == "get_info":
+            items = []
+            count = title.get_item_count()
+            for i in range(count):
+                label, name, value = title.get_item(i)
+                item = {"index": i, "label": label, "value": value}
+                if name != label:
+                    item["name"] = name
+                items.append(item)
+            return _ok(data=items)
+
+        elif action == "set_field":
+            title.set_item(p["field_name"], p["value"])
+            mech_conn.zwm_db.refresh_title()
+            return _ok(f"成功设置标题栏字段 '{p['field_name']}' = '{p['value']}'")
+
+        elif action == "update_batch":
+            results = []
+            for field_name, value in p["fields"].items():
+                title.set_item(field_name, value)
+                results.append(f"{field_name}={value}")
+            mech_conn.zwm_db.refresh_title()
+            return _ok(f"成功批量更新标题栏: {', '.join(results)}")
+
+        elif action == "get_field_count":
+            count = title.get_item_count()
+            return _ok("获取标题栏字段总数成功", count=count)
+
+        elif action == "get_field_by_index":
+            label, name, value = title.get_item(p["index"])
+            f = {"index": p["index"], "label": label, "value": value}
+            if name != label:
+                f["name"] = name
+            return _ok(data=f)
+
+        return _err("标题栏操作", ValueError(f"不支持的操作: {action}"))
+    except Exception as e:
+        return _err(f"标题栏操作({action})", e)
+
+
+@mcp.tool
+def zwcad_mech_manage_frame(action: str, params: dict = None) -> dict:
+    """图框管理。action: list|get_info|get_count|get_next_name|refresh(无需params),
+    get_name_by_index:{index} | get_name_by_point:{x,y,[z]}
+    switch:{frame_name} | update:{width,height,orientation,scale1,scale2,...}"""
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.open_file("")
+        p = params or {}
+
+        if action == "list":
+            count = mech_conn.zwm_db.get_frame_count()
+            frames = [mech_conn.zwm_db.get_frame_name(i) for i in range(count)]
+            return _ok("获取图框列表成功", data=frames)
+
+        elif action == "get_info":
+            frame = mech_conn.zwm_db.get_frame()
+            if not frame:
+                return _err("图框操作", ValueError("未找到图框对象"))
+            info = {}
+            for attr in ['width', 'height', 'std_name', 'frame_size_name', 'frame_style_name',
+                          'orientation', 'title_style_name', 'bom_style_name',
+                          'dhl_style_name', 'fjl_style_name', 'csl_style_name', 'ggl_style_name',
+                          'have_dhl', 'have_fjl', 'have_btl', 'have_csl', 'have_ggl',
+                          'scale1', 'scale2']:
+                if hasattr(frame, attr):
+                    try: info[attr] = getattr(frame, attr)
+                    except Exception: pass
+            return _ok("获取图框完整信息成功", data=info)
+
+        elif action == "get_count":
+            count = mech_conn.zwm_db.get_frame_count()
+            return _ok("获取图框总数成功", count=count)
+
+        elif action == "get_name_by_index":
+            name = mech_conn.zwm_db.get_frame_name(p["index"])
+            return _ok("获取图框名称成功", index=p["index"], name=name)
+
+        elif action == "get_name_by_point":
+            point = (p["x"], p["y"], p.get("z", 0))
+            name = mech_conn.zwm_db.get_frame_name2(point)
+            return _ok("获取图框名称成功", name=name)
+
+        elif action == "get_next_name":
+            frame_obj, name = mech_conn.zwm_db.get_next_frm_name()
+            result = {"frame_name": name, "has_frame": frame_obj is not None}
+            if frame_obj:
+                if hasattr(frame_obj, 'width'):
+                    result['width'] = frame_obj.width
+                if hasattr(frame_obj, 'height'):
+                    result['height'] = frame_obj.height
+            return _ok(data=result)
+
+        elif action == "switch":
+            mech_conn.zwm_db.switch_frame(p["frame_name"])
+            return _ok(f"成功切换到图框: {p['frame_name']}")
+
+        elif action == "update":
+            frame = mech_conn.zwm_db.get_frame()
+            if not frame:
+                return _err("图框操作", ValueError("未找到图框对象"))
+            updated = []
+            for attr, val in p.items():
+                if val is not None and hasattr(frame, attr):
+                    setattr(frame, attr, val)
+                    updated.append(f"{attr}={val}")
+            mech_conn.zwm_db.refresh_frame()
+            return _ok(f"成功更新图框属性: {', '.join(updated)}") if updated else _ok("未提供任何要更新的属性")
+
+        elif action == "refresh":
+            mech_conn.zwm_db.refresh_frame()
+            return _ok("图框刷新成功")
+
+        return _err("图框操作", ValueError(f"不支持的操作: {action}"))
+    except Exception as e:
+        return _err(f"图框操作({action})", e)
+
+
+@mcp.tool
+def zwcad_mech_manage_bom(action: str, params: dict = None) -> dict:
+    """明细表(BOM)管理。action及params:
+    get_row_count/refresh(无需params)
+    get_row:{row_index} | add_row:{data:{name:val,...}}
+    update_row:{row_index,data:{...}} | insert_row:{index,data:{...}}
+    delete_row:{index} | set_field:{row_index,field_key,value}
+    get_field:{row_index,field_index} | get_field_count:{row_index}
+    batch_update:{rows:[{row_index,data:{...}},...]}
+
+    持久化说明: 修改BOM数据后，内部自动调用refresh_bom()将更改写入DWG图纸。
+    请勿在BOM修改后调用zwcad_mech_manage_db的save操作，save会从图纸重载数据导致修改丢失。
+    如需保存DWG文件到磁盘，请使用zwcad_manage_document的save操作。"""
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.open_file("")
+        bom = mech_conn.zwm_db.get_bom()
+        p = params or {}
+
+        if action == "refresh":
+            mech_conn.zwm_db.refresh_bom()
+            return _ok("明细表刷新成功")
+
+        if not bom:
+            return _err("明细表操作", ValueError("未找到明细表对象"))
+
+        if action == "get_row_count":
+            count = bom.get_item_count()
+            return _ok("获取明细表行数成功", count=count)
+
+        elif action == "get_row":
+            row = bom.get_item(p["row_index"])
+            if not row:
+                return _err("明细表操作", ValueError(f"未找到索引 {p['row_index']} 的行"))
+            fields = []
+            field_count = row.get_item_count()
+            for i in range(field_count):
+                label, name, value = row.get_item(i)
+                f = {"field_index": i, "label": label, "value": value}
+                if name != label:
+                    f["name"] = name
+                fields.append(f)
+            return _ok(data={"row_index": p["row_index"], "field_count": field_count, "fields": fields})
+
+        elif action == "add_row":
+            new_row = bom.create_bom_row()
+            for field_name, value in p["data"].items():
+                new_row.set_item(field_name, value)
+            bom.add_item(new_row)
+            mech_conn.zwm_db.refresh_bom()
+            return _ok(f"成功添加明细表行: {p['data']}")
+
+        elif action == "update_row":
+            row = bom.get_item(p["row_index"])
+            if not row:
+                return _err("明细表操作", ValueError(f"未找到索引 {p['row_index']} 的行"))
+            for field_name, value in p["data"].items():
+                row.set_item(field_name, value)
+            bom.set_item(p["row_index"], row)
+            mech_conn.zwm_db.refresh_bom()
+            return _ok(f"成功更新明细表行 {p['row_index']}: {p['data']}")
+
+        elif action == "insert_row":
+            new_row = bom.create_bom_row()
+            for field_name, value in p["data"].items():
+                new_row.set_item(field_name, value)
+            bom.insert_item(p["index"], new_row)
+            mech_conn.zwm_db.refresh_bom()
+            return _ok(f"成功在位置 {p['index']} 插入明细表行")
+
+        elif action == "delete_row":
+            bom.delete_item(p["index"])
+            mech_conn.zwm_db.refresh_bom()
+            return _ok(f"成功删除明细表行 {p['index']}")
+
+        elif action == "set_field":
+            row = bom.get_item(p["row_index"])
+            if not row:
+                return _err("明细表操作", ValueError(f"未找到索引 {p['row_index']} 的行"))
+            row.set_item(p["field_key"], p["value"])
+            bom.set_item(p["row_index"], row)
+            mech_conn.zwm_db.refresh_bom()
+            return _ok(f"成功设置行 {p['row_index']} 的字段 '{p['field_key']}' = '{p['value']}'")
+
+        elif action == "get_field":
+            row = bom.get_item(p["row_index"])
+            if not row:
+                return _err("明细表操作", ValueError(f"未找到索引 {p['row_index']} 的行"))
+            label, name, value = row.get_item(p["field_index"])
+            f = {"row_index": p["row_index"], "field_index": p["field_index"], "label": label, "value": value}
+            if name != label:
+                f["name"] = name
+            return _ok(data=f)
+
+        elif action == "get_field_count":
+            row = bom.get_item(p["row_index"])
+            if not row:
+                return _err("明细表操作", ValueError(f"未找到索引 {p['row_index']} 的行"))
+            count = row.get_item_count()
+            return _ok("获取明细表字段数量成功", row_index=p["row_index"], count=count)
+
+        elif action == "batch_update":
+            rows_data = p.get("rows", [])
+            if not rows_data:
+                return _err("明细表操作", ValueError("batch_update需要rows参数: [{row_index, data:{...}}, ...]"))
+            updated = 0
+            failed = []
+            for item in rows_data:
+                ri = item["row_index"]
+                row = bom.get_item(ri)
+                if not row:
+                    failed.append({"row_index": ri, "error": "行不存在"})
+                    continue
+                for field_name, value in item.get("data", {}).items():
+                    row.set_item(field_name, value)
+                bom.set_item(ri, row)
+                updated += 1
+            mech_conn.zwm_db.refresh_bom()
+            return _ok(f"批量更新完成: 成功{updated}行", updated=updated, failed=failed)
+
+        return _err("明细表操作", ValueError(f"不支持的操作: {action}"))
+    except Exception as e:
+        return _err(f"明细表操作({action})", e)
+
+
+@mcp.tool
+def zwcad_mech_create_partlist() -> dict:
+    """创建明细表实体。通过向命令行发送 ZwmPartlist 命令实现。
+
+    当图纸中尚无明细表时调用此工具创建。参考官方SDK FormBom.cs，
+    命令格式为 _.ZwmPartlist（下划线=语言无关，点=强制内置命令）。
+    """
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.zwm_app.send_command("_.ZwmPartlist\n")
+        return _ok("成功创建明细表")
+    except Exception as e:
+        return _err("创建明细表", e)
+
+
+@mcp.tool
+def zwcad_mech_manage_db(action: str, params: dict = None) -> dict:
+    """机械模块数据库操作。action: open({[file_path]})|save({[flag]})|close。
+
+    注意: save操作用于保存机械模块数据库到文件，其参数dwgVer为图纸版本号(默认33)。
+    修改BOM/标题栏/图框后请使用各自的refresh方法(如zwcad_mech_manage_bom的refresh)持久化，
+    不要调用save，因为save会从图纸重载数据导致修改丢失。"""
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        p = params or {}
+
+        if action == "open":
+            file_path = p.get("file_path", "")
+            mech_conn.open_file(file_path)
+            return _ok(f"成功打开机械模块文件: {file_path}" if file_path else "成功连接当前活动图纸")
+
+        elif action == "save":
+            mech_conn.open_file("")
+            mech_conn.zwm_db.save(p.get("flag", 33))
+            return _ok("机械模块数据保存成功")
+
+        elif action == "close":
+            mech_conn.close()
+            return _ok("机械模块连接已关闭")
+
+        return _err("机械数据库操作", ValueError(f"不支持的操作: {action}"))
+    except Exception as e:
+        return _err(f"机械数据库操作({action})", e)
+
+
+@mcp.tool
+def zwcad_mech_doc(action: str, file_path: str, template: str = None) -> dict:
+    """中望机械文档操作。action: open|new|new_named(需template参数)。"""
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        if action == "open":
+            mech_conn.zwm_app.open_doc(file_path)
+            return _ok(f"成功打开文档: {file_path}")
+        elif action == "new":
+            mech_conn.zwm_app.new_doc(file_path)
+            return _ok(f"成功新建文档: {file_path}")
+        elif action == "new_named":
+            mech_conn.zwm_app.new_named_doc(file_path, template)
+            return _ok(f"成功新建命名文档: {file_path} (模板: {template})")
+        return _err("机械文档操作", ValueError(f"不支持的操作: {action}"))
+    except Exception as e:
+        return _err(f"机械文档操作({action})", e)
+
+
+@mcp.tool
+def zwcad_mech_cad_environment_init(std_name: str) -> dict:
+    """初始化CAD环境标准（如GB, ISO, DIN等）。"""
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.open_file("")
+        mech_conn.zwm_db.cad_environment_init(std_name)
+        return _ok(f"CAD 环境初始化成功 (标准: {std_name})", standard=std_name)
+    except Exception as e:
+        return _err("CAD 环境初始化", e)
+
+
+@mcp.tool
+def zwcad_mech_get_balloon(text: str = "") -> dict:
+    """获取球标对象（用于零件序号标注）。"""
+    try:
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.open_file("")
+        balloon = mech_conn.zwm_db.get_balloon(text)
+        if balloon:
+            return _ok(f"成功获取球标对象: {balloon}")
+        else:
+            return _err("获取球标", ValueError("未获取到球标对象"))
+    except Exception as e:
+        return _err("获取球标", e)
+
+
+@mcp.tool
+def zwcad_mech_insert_balloon(
+    arrow_x: float = 100.0,
+    arrow_y: float = 100.0,
+    arrow_z: float = 0.0,
+    symbol_x: float = 155.0,
+    symbol_y: float = 155.0,
+    symbol_z: float = 0.0,
+    text: str = "3",
+    seq_type: int = 2,
+    has_leader: bool = False,
+    mode: int = 0,
+) -> dict:
+    """插入球标（零件序号标注）。通过向命令行发送 LISP 命令 Zwm_BalloonInsert 实现。
+
+    参数:
+    - arrow_x/y/z: 箭头位置坐标
+    - symbol_x/y/z: 标注符号位置坐标
+    - text: 球标文字内容
+    - seq_type: 序号类型 0-6，对应前7种序号类型
+    - has_leader: 是否带引线 (True=带引线, False=不带引线)
+    - mode: 球标插入模式（LISP 列表首元素），默认 0
+
+    LISP 命令格式:
+    (Zwm_BalloonInsert (list <mode> (list ax ay az) (list sx sy sz) "text" seq_type leader))
+    """
     try:
         zcad_conn, _ = get_cad_connection()
-        app = zcad_conn.app
-        info = {}
-        for prop in ["Version", "Name", "Path", "FullName", "Caption",
-                     "WindowState", "Visible", "Width", "Height"]:
-            if hasattr(app, prop):
+
+        if not (0 <= seq_type <= 6):
+            return _err("插入球标", ValueError(f"序号类型 seq_type 必须为 0-6，当前值: {seq_type}"))
+
+        def _fmt_coord(v):
+            """格式化坐标值为 LISP 兼容的实数字符串。"""
+            v = float(v)
+            return f"{v:.1f}" if v == int(v) else repr(v)
+
+        leader_val = 1 if has_leader else 0
+        lisp = (
+            f"(Zwm_BalloonInsert (list {mode} "
+            f"(list {_fmt_coord(arrow_x)} {_fmt_coord(arrow_y)} {_fmt_coord(arrow_z)}) "
+            f"(list {_fmt_coord(symbol_x)} {_fmt_coord(symbol_y)} {_fmt_coord(symbol_z)}) "
+            f'"{text}" {seq_type} {leader_val}))'
+        )
+        # \x03 = ESC（发送两次取消当前命令），\r = 回车执行
+        cmd = "\x03\x03" + lisp + "\r"
+        zcad_conn.doc.SendCommand(cmd)
+
+        return _ok(
+            f"成功插入球标: {text}",
+            command=lisp,
+            arrow_point=[arrow_x, arrow_y, arrow_z],
+            symbol_point=[symbol_x, symbol_y, symbol_z],
+            text=text,
+            seq_type=seq_type,
+            has_leader=has_leader,
+            mode=mode,
+        )
+    except Exception as e:
+        return _err("插入球标", e)
+
+
+@mcp.tool
+def zwcad_mech_create_frame(
+    std_name: str = None,
+    frame_size_name: str = None,
+    orientation: str = "landscape",
+    width: float = 0.0,
+    height: float = 0.0,
+    scale1: float = 1.0,
+    scale2: float = 1.0,
+    title_style_name: str = None,
+    bom_style_name: str = None,
+    dhl_style_name: str = "图样代号",
+    fjl_style_name: str = "附加栏",
+    csl_style_name: str = "包络环面蜗杆",
+    ggl_style_name: str = "",
+    frame_style_name: str = None,
+    have_dhl: bool = False,
+    have_fjl: bool = False,
+    have_btl: bool = True,
+    have_csl: bool = False,
+    have_ggl: bool = False
+) -> dict:
+    """新建图幅/图框。所有参数均可选，默认从XML配置读取。
+    orientation: landscape|portrait。have_*: 各栏开关(dhl/fjl/btl/csl/ggl)。"""
+    try:
+        _tlb_err = _require_typelib("创建图框")
+        if _tlb_err:
+            return _tlb_err
+        _, mech_conn = get_cad_connection(require_mechanical=True)
+        mech_conn.open_file("")
+
+        if not std_name:
+            std_name = _get_default_standard()
+        if not frame_size_name:
+            frame_size_name = _get_default_frame_size(std_name)
+        if not title_style_name:
+            _, title_style_name = _get_title_styles(std_name)
+        if not bom_style_name:
+            _, bom_style_name = _get_bom_styles(std_name)
+        if not frame_style_name:
+            frame_style_name = _get_frame_styles(std_name, frame_size_name, orientation)
+
+        frame_obj, name = mech_conn.zwm_db.get_next_frm_name()
+        if not name:
+            return _ok("获取新图框名称失败", created=False)
+
+        mech_conn.zwm_db.switch_frame(name)
+        frame = mech_conn.zwm_db.get_frame()
+
+        if not frame:
+            return _ok("获取新图框对象失败", created=False)
+
+        fields = {
+            "std_name": std_name, "frame_size_name": frame_size_name,
+            "frame_style_name": frame_style_name, "orientation": orientation,
+            "width": str(int(width)), "height": str(int(height)),
+            "title_style_name": title_style_name, "bom_style_name": bom_style_name,
+            "dhl_style_name": dhl_style_name, "fjl_style_name": fjl_style_name,
+            "csl_style_name": csl_style_name, "ggl_style_name": ggl_style_name,
+            "have_dhl": "1" if have_dhl else "0", "have_fjl": "1" if have_fjl else "0",
+            "have_btl": "1" if have_btl else "0", "have_csl": "1" if have_csl else "0",
+            "have_ggl": "1" if have_ggl else "0",
+            "scale1": str(int(scale1)) if scale1 == int(scale1) else str(scale1),
+            "scale2": str(int(scale2)) if scale2 == int(scale2) else str(scale2),
+        }
+
+        failed = []
+        for key, val_str in fields.items():
+            if key in ("width", "height", "have_dhl", "have_fjl", "have_btl", "have_csl", "have_ggl"):
                 try:
-                    info[prop.lower()] = getattr(app, prop)
-                except Exception:
-                    pass
-        return _ok(data=info)
-    except Exception as error:
-        return _err("获取ZWCAD平台信息", error)
+                    setattr(frame, key, int(val_str))
+                except (ValueError, Exception) as e:
+                    failed.append({"key": key, "value": val_str, "error": str(e)})
+            else:
+                try:
+                    setattr(frame, key, val_str)
+                except Exception as e:
+                    failed.append({"key": key, "value": val_str, "error": str(e)})
+
+        mech_conn.zwm_db.build_frame(511)
+
+        return _ok(
+            f"成功创建图框: {name} (标准:{std_name}, 图幅:{frame_size_name})",
+            frame_name=name, setattr_failures=failed,
+        )
+    except Exception as e:
+        return _err("创建图框", e)
+
 
 # ############################################################
 #                   字典 / XData / 工具方法
@@ -2135,7 +2940,7 @@ def get_app_info() -> dict:
 
 
 @mcp.tool
-def manage_dictionary(action: str, params: dict = None) -> dict:
+def zwcad_manage_dictionary(action: str, params: dict = None) -> dict:
     """命名对象字典与XRecord管理。action及params:
     list(无需params) — 列出所有顶层字典
     add:{name} — 创建新字典
@@ -2150,7 +2955,7 @@ def manage_dictionary(action: str, params: dict = None) -> dict:
     get_entity_dict:{handle} — 获取实体的扩展字典
     has_entity_dict:{handle} — 检查实体是否有扩展字典"""
     try:
-        logger.info("tool_call manage_dictionary action=%s", action)
+        logger.info("tool_call zwcad_manage_dictionary action=%s", action)
         zcad_conn, _ = get_cad_connection()
         p = params or {}
         dicts = zcad_conn.doc.Dictionaries
@@ -2254,7 +3059,7 @@ def manage_dictionary(action: str, params: dict = None) -> dict:
 
 
 @mcp.tool
-def manage_xdata(action: str, params: dict = None) -> dict:
+def zwcad_manage_xdata(action: str, params: dict = None) -> dict:
     """扩展数据(XData)管理。action及params:
     list_apps(无需params) — 列出所有已注册应用程序名
     register_app:{app_name} — 注册新应用程序名(写XData前必须先注册)
@@ -2264,7 +3069,7 @@ def manage_xdata(action: str, params: dict = None) -> dict:
       常用类型码: 1000=字符串,1040=实数,1070=整数,1010=3D点
     delete_xdata:{handle,app_name} — 删除实体上指定应用的扩展数据"""
     try:
-        logger.info("tool_call manage_xdata action=%s", action)
+        logger.info("tool_call zwcad_manage_xdata action=%s", action)
         zcad_conn, _ = get_cad_connection()
         p = params or {}
 
@@ -2306,7 +3111,7 @@ def manage_xdata(action: str, params: dict = None) -> dict:
 
 
 @mcp.tool
-def manage_utility(action: str, params: dict = None) -> dict:
+def zwcad_manage_utility(action: str, params: dict = None) -> dict:
     """CAD工具方法(doc.Utility)。action及params:
     translate_coordinates:{point:[x,y,z],from_system:int,to_system:int,[displacement:bool]}
       坐标系: 0=WCS, 1=UCS, 2=DisplayDCS, 3=PaperSpaceDCS
@@ -2320,7 +3125,7 @@ def manage_utility(action: str, params: dict = None) -> dict:
     prompt:{message} — 在命令行显示消息
     get_object_id_string:{handle,[hex:bool]} — 获取实体ObjectID"""
     try:
-        logger.info("tool_call manage_utility action=%s", action)
+        logger.info("tool_call zwcad_manage_utility action=%s", action)
         zcad_conn, _ = get_cad_connection()
         p = params or {}
         util = zcad_conn.doc.Utility
@@ -2370,14 +3175,118 @@ def manage_utility(action: str, params: dict = None) -> dict:
         return _err(f"工具方法({action})", e)
 
 
+def _safe_attr(obj, name, default=None):
+    try:
+        return getattr(obj, name)
+    except Exception:
+        return default
+
+
+def _guess_product(*values) -> str:
+    text = " ".join(str(value or "") for value in values).lower()
+    if any(token in text for token in ("mechanical", "zwcadm", "mfg")):
+        return "mechanical"
+    return "platform"
+
+
+def _collect_zwcad_2d_capabilities(probe_cad: bool = True) -> dict:
+    platform = {"available": None, "error": None}
+    mechanical = {
+        "package_installed": importlib.util.find_spec("pyzwcadmech") is not None,
+        "package_loaded": ZwCADMech is not None,
+        "connection_available": None,
+        "typelib_loaded": False,
+        "typelib_source": None,
+        "import_error": _MECH_IMPORT_ERROR,
+    }
+    active = {"product": None, "application": None, "version": None, "document": None}
+
+    if probe_cad:
+        try:
+            zcad_conn, mech_conn = get_cad_connection()
+            app = _safe_attr(zcad_conn, "app")
+            doc = _safe_attr(zcad_conn, "doc")
+            app_name = _safe_attr(app, "Name") or _safe_attr(app, "Caption")
+            full_name = _safe_attr(app, "FullName")
+            version = _safe_attr(app, "Version")
+            document = _safe_attr(doc, "Name")
+            platform.update({
+                "available": True,
+                "application": app_name,
+                "path": full_name,
+                "version": version,
+            })
+            product = _guess_product(app_name, full_name)
+            if product == "mechanical":
+                zcad_conn, mech_conn = get_cad_connection(require_mechanical=True)
+            mechanical["connection_available"] = mech_conn is not None
+            active.update({
+                "product": product,
+                "application": app_name,
+                "version": version,
+                "document": document,
+            })
+        except Exception as exc:
+            platform.update({"available": False, "error": str(exc)})
+            mechanical["connection_available"] = False
+
+    typelib_loaded, typelib_source, typelib_error = _typelib_state()
+    mechanical["package_loaded"] = ZwCADMech is not None
+    mechanical["import_error"] = _MECH_IMPORT_ERROR
+    mechanical["typelib_loaded"] = bool(typelib_loaded)
+    mechanical["typelib_source"] = typelib_source
+    if typelib_error and typelib_error != "not_probed":
+        mechanical["typelib_error"] = str(typelib_error)
+
+    return {
+        "server": "ZWCAD-2D MCP Server",
+        "active": active,
+        "platform": platform,
+        "mechanical": mechanical,
+        "tool_catalog": {
+            "platform_core": 26,
+            "mechanical_extension": 11,
+            "zwcad_2d_diagnostics": 2,
+        },
+        "instance_policy": "首个版本只支持一个活动的 ZWCAD 系列实例",
+    }
+
+
+@mcp.tool
+def zwcad_get_capabilities(probe_cad: bool = True) -> dict:
+    """查看统一 MCP 当前可用的产品、连接状态、工具组和活动图纸。"""
+    return _collect_zwcad_2d_capabilities(probe_cad=probe_cad)
+
+
+@mcp.tool
+def zwcad_diagnose(probe_cad: bool = True) -> dict:
+    """诊断平台和机械后端，并给出不修改系统的排障建议。"""
+    result = _collect_zwcad_2d_capabilities(probe_cad=probe_cad)
+    recommendations = []
+    if result["platform"]["available"] is False:
+        recommendations.append("启动一个 ZWCAD 系列产品并打开 DWG，然后重连 MCP。")
+    mechanical = result["mechanical"]
+    if not mechanical["package_installed"]:
+        recommendations.append("如需机械工具，请重新运行 install.bat 安装 pyzwcadmech。")
+    elif not mechanical["connection_available"] and result["active"]["product"] == "mechanical":
+        recommendations.append("机械产品已识别但扩展未连接，请调用 zwcad_mech_diagnose 检查 ZwmToolKit。")
+    result["recommendations"] = recommendations
+    return result
+
+
 # ============================================================
 # 主程序入口
 # ============================================================
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """启动 stdio MCP 服务。console script 与 python -m zwcad2d 共用此入口。"""
     logger.info("=" * 60)
-    logger.info("ZWCAD Platform MCP Server 启动中...")
+    logger.info("ZWCAD-2D MCP Server 启动中...")
     logger.info("=" * 60)
     logger.info("服务器已就绪，等待客户端连接...")
     mcp.run(transport="stdio", show_banner=False)
 
+
+if __name__ == "__main__":
+    main()

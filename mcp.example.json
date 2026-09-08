@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "zwcad-2d": {
+      "command": "D:\\YOUR_PATH\\ZWCAD-2D\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "zwcad2d"
+      ],
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}
