@@ -1,9 +1,20 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" server.py
-) else (
-  py -3 server.py
+
+if not exist ".venv\Scripts\python.exe" (
+    echo [ERROR] .venv is missing. Run install.bat first.
+    pause
+    exit /b 1
 )
-endlocal
+
+set "PYTHONUTF8=1"
+echo Starting ZWCAD-2D MCP Server...
+echo This is a stdio server; waiting without a web page is normal.
+".venv\Scripts\python.exe" "src\server.py"
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] The server exited unexpectedly.
+    pause
+)
