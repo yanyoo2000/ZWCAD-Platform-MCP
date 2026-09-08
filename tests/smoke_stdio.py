@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 async def main() -> int:
     transport = StdioTransport(
         command=sys.executable,
-        args=["-m", "zwcad2d"],
+        args=[str(ROOT / "src" / "server.py")],
         env={"PYTHONUTF8": "1"},
         cwd=str(ROOT),
     )

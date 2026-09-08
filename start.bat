@@ -11,7 +11,7 @@ if not exist ".venv\Scripts\python.exe" (
 set "PYTHONUTF8=1"
 echo Starting ZWCAD-2D MCP Server...
 echo This is a stdio server; waiting without a web page is normal.
-".venv\Scripts\python.exe" -m zwcad2d
+".venv\Scripts\python.exe" "src\server.py"
 
 if errorlevel 1 (
     echo.

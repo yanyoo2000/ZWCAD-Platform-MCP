@@ -1,9 +1,14 @@
 import asyncio
+import sys
 import unittest
+from pathlib import Path
 
 from fastmcp import Client
 
-import zwcad2d.server as server
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+import server
 
 
 class Zwcad2DServerRuntimeTests(unittest.TestCase):

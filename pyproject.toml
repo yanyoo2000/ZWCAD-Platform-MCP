@@ -18,18 +18,19 @@ dependencies = [
 ]
 
 [project.scripts]
-zwcad-mcp = "zwcad2d.server:main"
+zwcad-mcp = "server:main"
 
 [tool.hatch.build]
-include = ["src/zwcad2d", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"]
+include = ["src", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/zwcad2d"]
+only-include = ["src"]
+sources = ["src"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "README.md" = "README.md"
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/zwcad2d", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "pyproject.toml"]
-exclude = ["参考/**", ".review-src/**", "node_modules/**", "tests/**", ".venv/**", "dist/**", "connector/**"]
+include = ["src", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "pyproject.toml"]
+exclude = [".review-src/**", "node_modules/**", "tests/**", ".venv/**", "dist/**", "connector/**"]

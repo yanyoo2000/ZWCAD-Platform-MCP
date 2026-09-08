@@ -67,7 +67,7 @@ def _load_mechanical_class():
 
 from pyzwcad import ZwCAD, APoint
 from pyzwcad.types import aDouble, aInt
-from .hatch_info import extract_hatch_loops
+from hatch_info import extract_hatch_loops
 
 mcp = FastMCP(name="ZWCAD-2D MCP Server")
 
@@ -3280,7 +3280,7 @@ def zwcad_diagnose(probe_cad: bool = True) -> dict:
 
 
 def main() -> None:
-    """启动 stdio MCP 服务。console script 与 python -m zwcad2d 共用此入口。"""
+    """启动 stdio MCP 服务。console script 与 src/server.py 共用此入口。"""
     logger.info("=" * 60)
     logger.info("ZWCAD-2D MCP Server 启动中...")
     logger.info("=" * 60)

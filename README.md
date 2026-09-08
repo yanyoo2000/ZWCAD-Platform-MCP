@@ -64,7 +64,7 @@ pip install zwcad-mcp
 验证安装：
 
 ```bash
-python -c "import zwcad2d; print(zwcad2d.__version__)"
+python -c "import importlib.metadata as m; print(m.version('zwcad-mcp'))"
 ```
 
 ### 3. 配置 MCP 客户端
@@ -108,7 +108,7 @@ python -c "import zwcad2d; print(zwcad2d.__version__)"
 
 在客户端中让 AI 调用 `zwcad_get_capabilities`：能返回 ZWCAD 版本与工具组清单即表示接入成功。若失败，调用 `zwcad_diagnose`（机械问题用 `zwcad_mech_diagnose`）查看逐项探测结果与修复建议。
 
-> 本服务为 stdio 模式，正常使用时由 MCP 客户端自动拉起，无需手动启动。如需排查启动阶段的问题，可在命令行执行 `zwcad-mcp`（等价的模块方式：`python -m zwcad2d`）。
+> 本服务为 stdio 模式，正常使用时由 MCP 客户端自动拉起，无需手动启动。如需排查启动阶段的问题，可在命令行执行 `zwcad-mcp`（等价的本地方式：`python src/server.py`）。
 
 ## 工具详细说明
 
@@ -267,7 +267,7 @@ python -c "import zwcad2d; print(zwcad2d.__version__)"
 
 ### server.py 预加载
 
-`zwcad2d/server.py`（MCP Server 主程序，入口见「快速开始」第 3 步）在导入时按上述 GUID 调用 `comtypes.client.GetModule` 预加载类型库。预加载成功时，后续 `pyzwcadmech.api` 即使文件搜索失败，也能通过策略 4 复用已生成的模块；同时将 `comtypes.client.gen_dir` 置空，使 COM 包装仅在内存中生成，避免某些中文版类型库触发 comtypes 的 mbcs 磁盘缓存解码错误。
+`src/server.py`（MCP Server 主程序，入口见「快速开始」第 3 步）在导入时按上述 GUID 调用 `comtypes.client.GetModule` 预加载类型库。预加载成功时，后续 `pyzwcadmech.api` 即使文件搜索失败，也能通过策略 4 复用已生成的模块；同时将 `comtypes.client.gen_dir` 置空，使 COM 包装仅在内存中生成，避免某些中文版类型库触发 comtypes 的 mbcs 磁盘缓存解码错误。
 
 ### 运行时重试
 
@@ -331,11 +331,8 @@ zwcad_mech_create_frame(
 ### 安装后的内容（wheel / sdist）
 
 ```
-zwcad2d/                  # Python 包，安装到 site-packages
-├── __init__.py           # __version__
-├── __main__.py           # python -m zwcad2d 入口
-├── server.py             # MCP Server 主程序（39 个工具）
-└── hatch_info.py         # 剖面线边界环提取（COM + LISP 回退）
+server.py                 # MCP Server 主程序（39 个工具）
+hatch_info.py             # 剖面线边界环提取（COM + LISP 回退）
 README.md
 LICENSE
 THIRD_PARTY_NOTICES.md
@@ -348,7 +345,7 @@ AI 客户端（Cursor / Claude Desktop / WorkBuddy / 任意 MCP 客户端）
         │
         │ MCP 协议（stdio, JSON-RPC）
         ▼
-   FastMCP Server（入口: zwcad2d/server.py, 39 个工具）
+   FastMCP Server（入口: src/server.py, 39 个工具）
         │
         ├── pyzwcad ──────► ZWCAD.Application COM API（平台绘图/标注/变换/查询）
         │                   └── 不依赖类型库，始终可用

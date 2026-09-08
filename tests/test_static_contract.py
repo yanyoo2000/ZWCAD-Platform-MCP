@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER = ROOT / "src" / "zwcad2d" / "server.py"
+SERVER = ROOT / "src" / "server.py"
 
 
 class Zwcad2DServerStaticTests(unittest.TestCase):
