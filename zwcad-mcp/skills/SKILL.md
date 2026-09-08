@@ -65,260 +65,83 @@ uvx 常见路径：`%USERPROFILE%\.local\bin\uvx.exe`（默认）、`%LOCALAPPDA
 
 ---
 
-## 附录 A：工具能力索引
+## 工具能力与参数参考
 
-以下索引用于按任务定位工具。第三列列出主要输入参数、动作和动作对应的 `params` 字段；具体 schema 仍以运行时 `tools/list` 返回为准。
+以下索引只有三列：工具、作用、参数。作用列列出工具在不同动作或类型下的具体能力；参数列说明参数用途。具体 schema 仍以运行时 `tools/list` 返回为准。
 
 ### 绘图、注释与标注
 
-| 工具 | 作用 | 主要输入 |
+| 工具 | 作用 | 参数 |
 | --- | --- | --- |
-| `zwcad_draw_entity` | 创建单个二维实体 | `entity_type`：`line`、`circle`、`arc`、`ellipse`、`lwpolyline`、`polyline`、`spline`、`point`、`ray`、`xline`、`mline`、`3d_polyline`；`params`：几何参数；`layer` |
-| `zwcad_draw_batch` | 批量创建多个实体 | `entities`：包含 `entity_type` 和 `params` 的列表；`layer` |
-| `zwcad_draw_3d_solid` | 创建基础三维实体 | `solid_type`：`box`、`cylinder`、`cone`、`sphere`、`torus`、`wedge`、`3d_face`；`params`：几何参数；`layer` |
-| `zwcad_add_annotation` | 添加文字、引线、填充和表格等注释 | `annotation_type`：`text`、`mtext`、`leader`、`tolerance`、`mleader`、`hatch`、`table`；`params`：注释参数；`layer` |
-| `zwcad_add_dimension` | 创建尺寸标注 | `dim_type`：`aligned`、`rotated`、`diametric`、`radial`、`angular`、`ordinate`；`params`：标注几何参数、公差/配合参数；`layer` |
-| `zwcad_insert_block` | 在指定位置插入图块引用 | `block_name`、`x`、`y`、`z`、`x_scale`、`y_scale`、`z_scale`、`rotation`、`layer` |
+| `zwcad_draw_entity` | 绘制：`line` 直线、`circle` 圆、`arc` 圆弧、`ellipse` 椭圆、`lwpolyline` 轻量多段线、`polyline` 多段线、`spline` 样条、`point` 点、`ray` 射线、`xline` 构造线、`mline` 多线、`3d_polyline` 三维多段线。 | `entity_type`：实体类型；`params`：几何数据，直线使用起止点，圆使用圆心和半径，多段线使用 `vertices`；`layer`：目标图层。 |
+| `zwcad_draw_batch` | 批量绘制上述二维或三维实体，减少调用次数。 | `entities`：实体列表，每项包含 `entity_type`、`params`，可选单项 `layer`；`layer`：默认图层。 |
+| `zwcad_draw_3d_solid` | 绘制：`box` 长方体、`cylinder` 圆柱、`cone` 圆锥、`sphere` 球体、`torus` 圆环、`wedge` 楔体、`3d_face` 三维面。 | `solid_type`：实体类型；`params`：中心点或原点、半径、长度、宽度、高度等几何数据；`layer`：目标图层。 |
+| `zwcad_add_annotation` | 添加：`text` 单行文字、`mtext` 多行文字、`leader` 引线、`tolerance` 形位公差、`mleader` 多重引线、`hatch` 填充、`table` 表格。 | `annotation_type`：注释类型；`params`：文字内容、位置、字高、引线点、填充图案或表格行列等；`layer`：目标图层。 |
+| `zwcad_add_dimension` | 创建：`aligned` 对齐标注、`rotated` 旋转标注、`diametric` 直径标注、`radial` 半径标注、`angular` 角度标注、`ordinate` 坐标标注。 | `dim_type`：标注类型；`params`：标注点和文字位置，可选公差、配合、前后缀和文字覆盖；`layer`：目标图层。 |
+| `zwcad_insert_block` | 在指定位置插入图块引用，并设置缩放、旋转和图层。 | `block_name`：图块定义名；`x,y,z`：插入点；`x_scale,y_scale,z_scale`：三轴缩放；`rotation`：弧度角；`layer`：目标图层。 |
 
 ### 实体查询、修改与尺寸查询
 
-| 工具 | 作用 | 主要输入 |
+| 工具 | 作用 | 参数 |
 | --- | --- | --- |
-| `zwcad_find_object` | 按条件或句柄定位第一个实体 | `handle`，或 `object_type` + `property_name` + `property_value` |
-| `zwcad_get_objects_in_model` | 获取模型空间对象列表 | `object_type`：可选类型过滤；`limit`：返回数量上限 |
-| `zwcad_get_entity_info` | 获取实体属性、几何数据和边界框 | `handle`，或 `object_type` + `property_name` + `property_value` |
-| `zwcad_set_entity_properties` | 修改实体通用属性 | `layer`、`color`、`linetype`、`linetype_scale`、`lineweight`、`visible`；以及实体定位参数 |
-| `zwcad_transform_entity` | 执行实体变换 | `action`：`copy`、`move`、`rotate`、`mirror`、`scale`、`delete`、`array_polar`、`array_rectangular`；`params`：动作参数；以及实体定位参数 |
-| `zwcad_modify_entity` | 修改实体几何属性 | `entity_type`：`circle`、`arc`、`line`、`text`、`mtext`、`polyline`、`spline`、`dimension`；也支持 `offset`、`explode`；`params`：对应几何参数；以及实体定位参数 |
-| `zwcad_query_dimensions` | 批量查询尺寸值、公差、标注文字和样式 | `detail`：`summary` 或 `full`；`layer`：可选图层过滤 |
+| `zwcad_find_object` | 按句柄或属性条件查找第一个实体。 | `handle`：实体句柄；`object_type`：对象类型；`property_name`：筛选属性名；`property_value`：筛选属性值。 |
+| `zwcad_get_objects_in_model` | 获取模型空间全部对象或指定类型对象。 | `object_type`：类型过滤；`limit`：最大返回数量，默认 500。 |
+| `zwcad_get_entity_info` | 获取实体属性、几何数据和边界框。 | `handle`、`object_type`、`property_name`、`property_value`：实体定位参数。 |
+| `zwcad_set_entity_properties` | 修改图层、颜色、线型、线型比例、线宽和可见性。 | `layer`：图层；`color`：颜色索引；`linetype`：线型；`linetype_scale`：线型比例；`lineweight`：线宽；`visible`：可见性；其余为实体定位参数。 |
+| `zwcad_transform_entity` | `copy` 复制、`move` 移动、`rotate` 旋转、`mirror` 镜像、`scale` 缩放、`delete` 删除、`array_polar` 环形阵列、`array_rectangular` 矩形阵列。 | `action`：变换动作；`params`：复制/移动使用起止点，旋转使用基点和角度，镜像使用镜像线两点，缩放使用基点和比例，阵列使用中心/数量/间距；`handle` 或属性组合：目标实体。 |
+| `zwcad_modify_entity` | 修改：`circle`、`arc`、`line`、`text`、`mtext`、`polyline`、`spline`、`dimension`；以及 `offset` 偏移、`explode` 分解。 | `entity_type`：修改类型；`params`：半径、圆心、端点、文字、闭合、偏差、公差或偏移距离等；其余为实体定位参数。 |
+| `zwcad_query_dimensions` | `summary` 查询尺寸摘要，`full` 查询完整几何、文字和样式信息。 | `detail`：返回详情级别；`layer`：标注图层过滤。 |
 
 实体定位统一优先使用 `handle`；没有句柄时使用 `object_type` + `property_name` + `property_value`。
 
 ### 样式、视图与文档
 
-| 工具 | 作用 | 主要输入 |
+| 工具 | 作用 | 参数 |
 | --- | --- | --- |
-| `zwcad_manage_style` | 管理图层、线型、文字样式和标注样式 | `style_type`：`layer`、`linetype`、`textstyle`、`dimstyle`；`action`：`list`、`add`、`set_active`、`set_properties`；`name`、`properties` |
-| `zwcad_manage_view` | 管理布局和视图 | `action`：`list_layouts`、`get_active_layout`、`add_layout`、`set_active_layout`、`list_views`、`add_view`、`set_active_space`、`get_active_space`；`name`、`params` |
-| `zwcad_zoom` | 控制当前视图范围 | `mode`：`extents`、`all`、`previous`、`window`、`center`、`scale`；`params`：窗口、中心点或比例参数 |
-| `zwcad_manage_document` | 管理图纸生命周期、保存、导入导出和打印 | `action`：`new`、`save`、`close`、`info`、`list`、`activate`、`export`、`import`、`plot`、`regen`、`start_undo`、`end_undo`、`wblock`；`params`：动作参数 |
-| `zwcad_manage_table` | 操作 CAD 表格 | `action`：`set_cell`、`get_cell`、`insert_rows`、`delete_rows`、`set_column_width`、`set_row_height`、`merge_cells`；`params`：行列和单元格参数；以及实体定位参数 |
-| `zwcad_select_entities` | 创建和管理选择集 | `action`：`select`、`by_polygon`、`get_items`、`get_picked`、`list`、`clear`、`delete`；`params`：选择模式、点、过滤器、选择集名称等 |
-| `zwcad_manage_block` | 管理图块定义和属性 | `action`：`list`、`info`、`create`、`get_attributes`；`name`、`params`；获取属性时使用实体定位参数 |
+| `zwcad_manage_style` | `list` 列出样式、`add` 新增样式、`set_active` 设置当前样式、`set_properties` 修改样式。支持图层、线型、文字样式和标注样式。 | `style_type`：样式类型；`action`：动作；`name`：样式名；`properties`：颜色、线型、开关、字体、宽度等属性。 |
+| `zwcad_manage_view` | `list_layouts`、`get_active_layout`、`add_layout`、`set_active_layout` 管理布局；`list_views`、`add_view` 管理视图；`set_active_space`、`get_active_space` 切换或读取模型/图纸空间。 | `action`：视图动作；`name`：布局或视图名；`params`：空间、视图范围等参数。 |
+| `zwcad_zoom` | `extents` 全图范围、`all` 全部对象、`previous` 上一次视图、`window` 窗口范围、`center` 中心缩放、`scale` 比例缩放。 | `mode`：缩放模式；`params`：窗口角点、中心点、放大倍数或比例类型。 |
+| `zwcad_manage_document` | `new` 新建、`save` 保存、`close` 关闭、`info` 信息、`list` 列表、`activate` 激活、`export` 导出、`import` 导入、`plot` 打印、`regen` 重生成、`start_undo` / `end_undo` 撤销组、`wblock` 写块。 | `action`：文档动作；`params`：文件路径、文档名、格式、打印配置、视口范围或选择集名。 |
+| `zwcad_manage_table` | `set_cell` / `get_cell` 设置或读取单元格、`insert_rows` / `delete_rows` 插入或删除行、`set_column_width` 设置列宽、`set_row_height` 设置行高、`merge_cells` 合并单元格。 | `action`：表格动作；`params`：行列索引、文本、数量、宽高或合并范围；其余为表格实体定位参数。 |
+| `zwcad_select_entities` | `select` 窗口/交叉/全部选择、`by_polygon` 多边形选择、`get_items` 读取选择集、`get_picked` 读取当前拾取集、`list` 列出选择集、`clear` 清空、`delete` 删除选择集。 | `action`：选择集动作；`params`：模式、坐标点、选择集名、最大数量、过滤器和是否返回对象；`filter`：类型、图层、颜色、线型、可见性等条件。 |
+| `zwcad_manage_block` | `list` 列出图块、`info` 查看定义、`create` 创建定义、`get_attributes` 读取图块引用属性。 | `action`：图块动作；`name`：图块名；`params`：原点和详情开关；获取属性时使用实体定位参数。 |
 
 ### 系统与诊断
 
-| 工具 | 作用 | 主要输入 |
+| 工具 | 作用 | 参数 |
 | --- | --- | --- |
-| `zwcad_get_variable` | 读取系统变量 | `name`，如 `DIMSCALE`、`LTSCALE`、`OSMODE` |
-| `zwcad_set_variable` | 写入系统变量 | `name`、`value` |
-| `zwcad_get_app_info` | 获取应用和安装环境信息 | `scope`：`cad`、`mech_version`、`mech_cad_path`、`mech_zwm_path`、`mech_style_path`、`mech_about` |
-| `zwcad_get_capabilities` | 查看当前产品、连接状态、工具组和活动图纸 | `probe_cad`：是否探测 CAD 连接 |
-| `zwcad_diagnose` | 诊断平台和机械后端 | `probe_cad`：是否探测 CAD 连接 |
-| `zwcad_mech_diagnose` | 诊断机械扩展和 ZwmToolKit 类型库 | 无输入参数 |
+| `zwcad_get_variable` | 读取系统变量值。 | `name`：变量名，例如 `DIMSCALE`、`LTSCALE`、`OSMODE`。 |
+| `zwcad_set_variable` | 写入系统变量值。 | `name`：变量名；`value`：新值。 |
+| `zwcad_get_app_info` | `cad` 获取 ZWCAD 版本/路径/窗口；`mech_version` 获取机械版本；`mech_cad_path` 获取机械安装路径；`mech_zwm_path` 获取类型库路径；`mech_style_path` 获取样式路径；`mech_about` 获取机械信息。 | `scope`：信息范围。 |
+| `zwcad_get_capabilities` | 探测当前产品、连接状态、工具组和活动图纸。 | `probe_cad`：是否实际连接并探测 CAD。 |
+| `zwcad_diagnose` | 诊断平台和机械后端，返回错误和修复建议。 | `probe_cad`：是否探测 CAD 连接。 |
+| `zwcad_mech_diagnose` | 探测机械应用、数据库、标题栏和 ZwmToolKit 类型库。 | 无输入参数。 |
 
 ### 机械扩展
 
-| 工具 | 作用 | 主要输入 |
+| 工具 | 作用 | 参数 |
 | --- | --- | --- |
-| `zwcad_mech_manage_title_block` | 读取、设置和批量更新标题栏 | `action`：`get_info`、`set_field`、`update_batch`、`get_field_count`、`get_field_by_index`；`params`：字段名、字段值或索引 |
-| `zwcad_mech_manage_frame` | 查询、切换、更新和刷新图框 | `action`：`list`、`get_info`、`get_count`、`get_name_by_index`、`get_name_by_point`、`get_next_name`、`switch`、`update`、`refresh`；`params`：图框名称、坐标或属性 |
-| `zwcad_mech_create_frame` | 创建图幅和图框 | `std_name`、`frame_size_name`、`orientation`、尺寸、比例、样式名称，以及 `have_dhl`、`have_fjl`、`have_btl`、`have_csl`、`have_ggl` 等栏位开关 |
-| `zwcad_mech_manage_bom` | 增删改查明细表数据 | `action`：`get_row_count`、`get_row`、`add_row`、`update_row`、`insert_row`、`delete_row`、`set_field`、`get_field`、`get_field_count`、`batch_update`、`refresh`；`params`：行、字段和数据 |
-| `zwcad_mech_create_partlist` | 创建明细表实体 | 无输入参数，通过 CAD 命令创建当前图纸明细表 |
-| `zwcad_mech_manage_db` | 管理机械数据库 | `action`：`open`、`save`、`close`；`params`：文件路径或保存选项 |
-| `zwcad_mech_doc` | 管理机械文档 | `action`：`open`、`new`、`new_named`；`file_path`、`template` |
-| `zwcad_mech_cad_environment_init` | 初始化机械 CAD 标准环境 | `std_name`：如 `GB`、`ISO`、`DIN` |
-| `zwcad_mech_get_balloon` | 读取球标信息 | `text`：可选球标文字过滤 |
-| `zwcad_mech_insert_balloon` | 插入球标 | 箭头位置 `arrow_x/y/z`、标注位置 `symbol_x/y/z`、`text`、`seq_type`、`has_leader`、`mode` |
+| `zwcad_mech_manage_title_block` | `get_info` 读取全部字段、`set_field` 设置字段、`update_batch` 批量更新、`get_field_count` 读取字段数、`get_field_by_index` 按索引读取字段。 | `action`：标题栏动作；`params`：`field_name` 字段名、`value` 字段值、`fields` 批量字段、`index` 字段索引。 |
+| `zwcad_mech_manage_frame` | `list` 列出图框、`get_info` 读取信息、`get_count` 统计数量、`get_name_by_index` / `get_name_by_point` / `get_next_name` 查询名称、`switch` 切换、`update` 更新、`refresh` 刷新。 | `action`：图框动作；`params`：索引、坐标、`frame_name`、宽高、方向、比例和样式属性。 |
+| `zwcad_mech_create_frame` | 创建指定标准、图幅、方向和栏位的图框。 | `std_name`：标准；`frame_size_name`：图幅；`orientation`：方向；`width,height`：自定义尺寸；`scale1,scale2`：比例；各 `*_style_name`：样式；各 `have_*`：栏位开关。 |
+| `zwcad_mech_manage_bom` | `get_row_count` 统计、`get_row` 读取、`add_row` 新增、`update_row` 更新、`insert_row` 插入、`delete_row` 删除、`set_field` 设置字段、`get_field` 读取字段、`get_field_count` 统计字段、`batch_update` 批量更新、`refresh` 刷新。 | `action`：BOM 动作；`params`：`row_index` / `index` 行索引、`data` 行数据、`field_key` / `field_index` 字段定位、`rows` 批量数据。 |
+| `zwcad_mech_create_partlist` | 在当前图纸中创建明细表实体。 | 无输入参数。 |
+| `zwcad_mech_manage_db` | `open` 打开数据库、`save` 保存数据库、`close` 关闭数据库。 | `action`：数据库动作；`params`：`file_path` 文件路径或保存选项。 |
+| `zwcad_mech_doc` | `open` 打开、`new` 新建、`new_named` 按名称或模板新建机械文档。 | `action`：文档动作；`file_path`：文件路径；`template`：模板路径或名称。 |
+| `zwcad_mech_cad_environment_init` | 按指定标准初始化机械 CAD 环境。 | `std_name`：标准名，例如 `GB`、`ISO`、`DIN`。 |
+| `zwcad_mech_get_balloon` | 按文字条件读取球标信息。 | `text`：可选球标文字或序号过滤条件。 |
+| `zwcad_mech_insert_balloon` | 在指定位置插入球标，可带引线并设置序号类型。 | `arrow_x/y/z`：箭头位置；`symbol_x/y/z`：球标位置；`text`：显示文字；`seq_type`：序号类型；`has_leader`：是否带引线；`mode`：插入模式。 |
 
 ### 扩展数据与 CAD 工具
 
-| 工具 | 作用 | 主要输入 |
+| 工具 | 作用 | 参数 |
 | --- | --- | --- |
-| `zwcad_manage_dictionary` | 管理命名对象字典和 XRecord | `action`：`list`、`add`、`get_items`、`add_object`、`get_object`、`remove`、`rename`、`add_xrecord`、`get_xrecord`、`set_xrecord`、`get_entity_dict`、`has_entity_dict`；`params`：字典和条目参数 |
-| `zwcad_manage_xdata` | 读写实体扩展数据 | `action`：`list_apps`、`register_app`、`get_xdata`、`set_xdata`、`delete_xdata`；`params`：`handle`、应用名、数据类型和值 |
-| `zwcad_manage_utility` | 执行 CAD 通用计算和对象辅助操作 | `action`：`translate_coordinates`、`polar_point`、`angle_to_real`、`angle_to_string`、`real_to_string`、`distance_to_real`、`prompt`、`get_object_id_string`；`params`：点、角度、距离、单位和精度等 |
+| `zwcad_manage_dictionary` | `list` 列出字典、`add` 创建字典、`get_items` 读取条目、`add_object` / `get_object` / `remove` 管理对象、`rename` 重命名、`add_xrecord` / `get_xrecord` / `set_xrecord` 管理 XRecord、`get_entity_dict` / `has_entity_dict` 查询实体字典。 | `action`：字典动作；`params`：`name`、`dict_name`、`keyword`、`object_name`、`old_name`、`new_name`、`handle`、`data_types`、`data_values`。 |
+| `zwcad_manage_xdata` | `list_apps` 列出应用、`register_app` 注册应用、`get_xdata` 读取、`set_xdata` 写入、`delete_xdata` 删除扩展数据。 | `action`：XData 动作；`params`：`handle` 实体句柄、`app_name` 应用名、`data_types` 类型码、`data_values` 数据值。 |
+| `zwcad_manage_utility` | `translate_coordinates` 坐标转换、`polar_point` 极坐标计算、`angle_to_real` / `angle_to_string` 角度转换、`real_to_string` / `distance_to_real` 数值转换、`prompt` 输出提示、`get_object_id_string` 获取对象 ID。 | `action`：工具动作；`params`：点、坐标系、角度、距离、单位、精度、提示文本、句柄和十六进制选项。 |
 
 当用户提出能力需求时，先从本附录定位工具，再读取该工具的运行时 schema；如果工具未出现在 `tools/list` 中，才判断当前服务版本不具备该能力。
 
----
-
-## 附录 B：工具参数参考
-
-以下说明解释各工具参数的用途。坐标沿用当前图纸单位，角度统一使用弧度；方括号表示可选字段。
-
-#### 公共参数
-
-- `layer`：目标图层名称，默认使用 `0`。
-- `handle`：实体句柄，优先级最高，用于精确定位实体。
-- `object_type`：CAD 对象类型，例如 `Line`、`Circle`、`BlockReference`。
-- `property_name`：用于筛选实体的属性名，例如 `Layer`、`Color`、`TextString`。
-- `property_value`：与 `property_name` 对应的属性值。
-- `params`：当前工具动作的详细参数对象，字段随 `action`、`entity_type` 或 `mode` 变化。
-
-#### 参数命名约定
-
-- `x`、`y`、`z`：一个点的三个坐标；`x1,y1,z1` 和 `x2,y2,z2` 通常分别表示起点和终点。
-- `center_x`、`center_y`、`center_z`：圆、球、圆柱等对象的中心点；`base_x`、`base_y`、`base_z`：变换操作的基点。
-- `arrow_x/y/z`：引线箭头点；`symbol_x/y/z`：标注符号点；`text_x`、`text_y`：标注文字位置。
-- `points`：按顺序排列的点列表，通常用于引线、折线或多边形；`vertices`：实体顶点列表；`fit_points`：样条曲线拟合点列表。
-- `radius`：半径；`torus_radius`：圆环中心线半径；`tube_radius`：圆环管半径；`height`、`width`、`length`、`depth`：几何尺寸。
-- `angle`、`rotation`、`rotation_angle`：旋转或方向角，单位为弧度；`start_angle`、`end_angle`：弧线起止角。
-- `scale`、`scale1`、`scale2`：比例因子；`x_scale`、`y_scale`、`z_scale`：三个坐标方向的缩放因子。
-- `count`：数量；`index`：从 0 开始的索引；`row` / `col`：表格行列索引；`row_index`：行索引；`field_index`：字段索引。
-- `name`：文档、布局、样式、图块或选择集名称，具体含义由工具动作决定；`value`：要写入的字段或系统变量值。
-- `text`：文字内容；`height`：文字或几何高度；`width`：文字宽度或几何宽度；`precision`：显示精度；`unit`：单位或角度格式编号。
-
-#### 绘图与标注参数
-
-- `zwcad_draw_entity`
-  - `entity_type`：要创建的实体类型。
-  - `params`：几何参数。`line` 使用 `x1,y1,x2,y2,[z1,z2]`；`circle` 使用 `center_x,center_y,radius,[center_z]`；`arc` 使用圆心、半径、起止角；`ellipse` 使用主轴端点和半径比；`lwpolyline` / `polyline` / `mline` / `3d_polyline` 使用 `vertices`；`spline` 使用 `fit_points`；`point` 使用 `x,y,[z]`；`ray` / `xline` 使用起点和方向点。`closed` 表示多段线是否闭合。
-  - `layer`：新实体所在图层。
-- `zwcad_draw_batch`
-  - `entities`：实体列表，每项包含 `entity_type`、`params`，可用 `layer` 覆盖外层图层。
-  - `layer`：未在单项中指定图层时使用的默认图层。
-- `zwcad_draw_3d_solid`
-  - `solid_type`：`box`、`cylinder`、`cone`、`sphere`、`torus`、`wedge` 或 `3d_face`。
-  - `params`：`box` 使用原点和长宽高；`cylinder` / `cone` 使用中心点、半径和高度；`sphere` 使用中心点和半径；`torus` 使用中心点、圆环半径和管半径；`wedge` 使用中心点和长宽高；`3d_face` 使用 3 或 4 个顶点。
-  - `layer`：新实体所在图层。
-- `zwcad_add_annotation`
-  - `annotation_type`：`text`、`mtext`、`leader`、`tolerance`、`mleader`、`hatch` 或 `table`。
-  - `params`：`text` / `mtext` 使用文字、位置、字高和宽度；`leader` / `mleader` 使用 `points` 和文字参数；`tolerance` 使用文字和位置；`hatch` 使用 `pattern_name`、比例和角度；`table` 使用位置、行列数、行高和列宽。
-  - `layer`：注释对象所在图层。
-- `zwcad_add_dimension`
-  - `dim_type`：`aligned`、`rotated`、`diametric`、`radial`、`angular` 或 `ordinate`。
-  - `params`：`aligned` / `rotated` 使用两端点和文字位置；`rotated` 还需要 `rotation_angle`；`diametric` 使用弦端点和引线长度；`radial` 使用圆心、弦点和引线长度；`angular` 使用顶点、两条边和文字位置；`ordinate` 使用定义点、引线点和 `use_x_axis`。
-  - `params` 中还可使用 `tolerance_display`、`upper_deviation`、`lower_deviation`、`tolerance_precision`、`tolerance_height_scale`、`fit_symbol`、`fit_stacked`、`fit_height_scale`、`text_prefix`、`text_suffix`、`text_override` 设置公差、配合和文字覆盖。
-  - `layer`：标注所在图层。
-- `zwcad_insert_block`
-  - `block_name`：已有图块定义名称。
-  - `x,y,z`：插入点坐标，`z` 默认为 0。
-  - `x_scale,y_scale,z_scale`：三个方向的缩放比例，默认 1。
-  - `rotation`：旋转角度，单位为弧度。
-  - `layer`：图块引用所在图层。
-
-#### 实体查询与修改参数
-
-- `zwcad_find_object`
-  - `handle`：按句柄精确查找。
-  - `object_type`：限定对象类型。
-  - `property_name`：指定筛选属性。
-  - `property_value`：指定属性值。
-- `zwcad_get_objects_in_model`
-  - `object_type`：可选的对象类型过滤。
-  - `limit`：最多返回的对象数量，默认 500。
-- `zwcad_get_entity_info`
-  - `handle`、`object_type`、`property_name`、`property_value`：实体定位参数。
-- `zwcad_set_entity_properties`
-  - `layer`：修改实体图层。
-  - `color`：修改实体颜色索引。
-  - `linetype`：修改实体线型名称。
-  - `linetype_scale`：修改实体线型比例。
-  - `lineweight`：修改实体线宽。
-  - `visible`：设置实体可见性；`false` 表示隐藏，不代表从图纸中删除。
-  - `object_type`、`property_name`、`property_value`、`handle`：实体定位参数。
-- `zwcad_transform_entity`
-  - `action`：`copy`、`move`、`rotate`、`mirror`、`scale`、`delete`、`array_polar` 或 `array_rectangular`。
-  - `params`：`copy` / `move` 使用起点和终点；`rotate` 使用基点和角度；`mirror` 使用镜像线两点；`scale` 使用基点和比例；`delete` 不需要额外字段；`array_polar` 使用中心点、数量和填充角；`array_rectangular` 使用行列数、行列间距和可选层间距。
-  - `object_type`、`property_name`、`property_value`、`handle`：要变换的实体定位参数。
-- `zwcad_modify_entity`
-  - `entity_type`：`circle`、`arc`、`line`、`text`、`mtext`、`polyline`、`spline` 或 `dimension`；也支持 `offset`、`explode`。
-  - `params`：`circle` / `arc` 使用半径、圆心和角度；`line` 使用起止点；`text` / `mtext` 使用文字、字高、旋转和位置；`polyline` / `spline` 使用闭合、宽度、拟合和切线参数；`dimension` 使用公差和配合参数；`offset` 使用 `distance`；`explode` 不需要额外字段。
-  - `object_type`、`property_name`、`property_value`、`handle`：要修改的实体定位参数。
-- `zwcad_query_dimensions`
-  - `detail`：`summary` 返回摘要，`full` 返回完整几何和文字信息。
-  - `layer`：可选的标注图层过滤。
-
-#### 样式、视图、文档和选择集参数
-
-- `zwcad_manage_style`
-  - `style_type`：`layer`、`linetype`、`textstyle` 或 `dimstyle`。
-  - `action`：`list`、`add`、`set_active` 或 `set_properties`。
-  - `name`：样式或图层名称。
-  - `properties`：要新增或修改的属性；图层支持 `color`、`linetype`、`on`、`locked`、`freeze`，文字样式支持字体、宽度和倾斜角等属性。
-- `zwcad_manage_view`
-  - `action`：`list_layouts`、`get_active_layout`、`add_layout`、`set_active_layout`、`list_views`、`add_view`、`set_active_space` 或 `get_active_space`。
-  - `name`：布局或视图名称。
-  - `params`：创建视图、布局或切换空间所需的参数；`set_active_space` 使用 `space=model|paper`。
-- `zwcad_zoom`
-  - `mode`：`extents`、`all`、`previous`、`window`、`center` 或 `scale`。
-  - `params`：`window` 使用两个角点；`center` 使用中心点和可选放大倍数；`scale` 使用比例和可选比例类型。
-- `zwcad_manage_document`
-  - `action`：`new`、`save`、`close`、`info`、`list`、`activate`、`export`、`import`、`plot`、`regen`、`start_undo`、`end_undo` 或 `wblock`。
-  - `params`：`save` 使用 `file_path`；`close` 使用 `save_changes`；`activate` 使用文档名；`export` / `import` 使用文件名及格式或插入参数；`plot` 使用输出文件和打印配置；`regen` 使用视口范围；`wblock` 使用文件名和可选选择集名称。
-- `zwcad_manage_table`
-  - `action`：`set_cell`、`get_cell`、`insert_rows`、`delete_rows`、`set_column_width`、`set_row_height` 或 `merge_cells`。
-  - `params`：单元格动作使用 `row`、`col`、`text`；行操作使用行索引、数量和高度；列宽使用列索引和宽度；合并使用起止行列。
-  - `object_type`、`property_name`、`property_value`、`handle`：表格实体定位参数。
-- `zwcad_select_entities`
-  - `action`：`select`、`by_polygon`、`get_items`、`get_picked`、`list`、`clear` 或 `delete`。
-  - `params`：`select` 使用选择模式和窗口坐标；`by_polygon` 使用多边形模式和 `points`；查询动作使用选择集名称和最大数量；选择动作可附带 `filter`、`return_items`。
-  - `filter`：支持 `entity_type`、`dimstyle`、`layer`、`color`、`linetype`、`textstyle`、`block_name`、`visible`、`space` 等 DXF 条件。
-- `zwcad_manage_block`
-  - `action`：`list`、`info`、`create` 或 `get_attributes`。
-  - `name`：图块定义名称；`create` 和 `info` 需要使用。
-  - `params`：创建图块时可使用 `x`、`y`、`z` 原点，列表查询可用 `detail`。
-  - `object_type`、`property_name`、`property_value`、`handle`：获取图块引用属性时的实体定位参数。
-
-#### 系统与诊断参数
-
-- `zwcad_get_variable`：`name` 是系统变量名称，例如 `DIMSCALE`、`LTSCALE`、`OSMODE`。
-- `zwcad_set_variable`：`name` 是系统变量名称，`value` 是要写入的值。
-- `zwcad_get_app_info`：`scope` 选择信息范围：`cad`、`mech_version`、`mech_cad_path`、`mech_zwm_path`、`mech_style_path` 或 `mech_about`。
-- `zwcad_get_capabilities`：`probe_cad` 控制是否实际探测当前 CAD 连接。
-- `zwcad_diagnose`：`probe_cad` 控制是否在诊断中探测 CAD 连接。
-- `zwcad_mech_diagnose`：无输入参数，执行机械应用、数据库、标题栏和类型库探测。
-
-#### 机械扩展参数
-
-- `zwcad_mech_manage_title_block`
-  - `action`：`get_info`、`set_field`、`update_batch`、`get_field_count` 或 `get_field_by_index`。
-  - `params`：`set_field` 使用 `field_name`、`value`；`update_batch` 使用 `fields` 字典；`get_field_by_index` 使用 `index`。
-- `zwcad_mech_manage_frame`
-  - `action`：`list`、`get_info`、`get_count`、`get_name_by_index`、`get_name_by_point`、`get_next_name`、`switch`、`update` 或 `refresh`。
-  - `params`：按动作使用 `index`、`x,y,[z]`、`frame_name`，或图框的宽高、方向、比例和样式属性。
-- `zwcad_mech_create_frame`
-  - `std_name`：制图标准，例如 `GB`、`ISO`、`DIN`。
-  - `frame_size_name`：图幅名称，例如 `A3`。
-  - `orientation`：`landscape` 或 `portrait`。
-  - `width`、`height`：自定义图框宽高，默认由图幅配置决定。
-  - `scale1`、`scale2`：图框比例参数。
-  - `title_style_name`、`bom_style_name`、`dhl_style_name`、`fjl_style_name`、`csl_style_name`、`ggl_style_name`、`frame_style_name`：标题栏、明细表、附加栏和图框样式名称。
-  - `have_dhl`、`have_fjl`、`have_btl`、`have_csl`、`have_ggl`：是否创建对应栏位。
-- `zwcad_mech_manage_bom`
-  - `action`：`get_row_count`、`get_row`、`add_row`、`update_row`、`insert_row`、`delete_row`、`set_field`、`get_field`、`get_field_count`、`batch_update` 或 `refresh`。
-  - `params`：行操作使用 `row_index` 或 `index`；新增和更新使用 `data`；字段操作使用 `field_key` 或 `field_index`；批量更新使用 `rows`。
-- `zwcad_mech_create_partlist`：无输入参数，在当前图纸中通过机械 CAD 命令创建明细表实体。
-- `zwcad_mech_manage_db`
-  - `action`：`open`、`save` 或 `close`。
-  - `params`：`open` 使用可选 `file_path`；`save` 使用可选保存标志。BOM、标题栏和图框修改后的 DWG 保存应使用文档工具。
-- `zwcad_mech_doc`
-  - `action`：`open`、`new` 或 `new_named`。
-  - `file_path`：打开或新建文档的文件路径。
-  - `template`：`new_named` 使用的模板名称或路径。
-- `zwcad_mech_cad_environment_init`：`std_name` 是要初始化的 CAD 标准，例如 `GB`、`ISO`、`DIN`。
-- `zwcad_mech_get_balloon`：`text` 是可选的球标文字或序号过滤条件。
-- `zwcad_mech_insert_balloon`
-  - `arrow_x`、`arrow_y`、`arrow_z`：引线箭头位置。
-  - `symbol_x`、`symbol_y`、`symbol_z`：球标符号位置。
-  - `text`：球标显示文字。
-  - `seq_type`：序号类型，取值 0-6。
-  - `has_leader`：是否绘制引线。
-  - `mode`：机械 CAD 球标插入模式。
-
-#### 扩展数据与 CAD 工具参数
-
-- `zwcad_manage_dictionary`
-  - `action`：`list`、`add`、`get_items`、`add_object`、`get_object`、`remove`、`rename`、`add_xrecord`、`get_xrecord`、`set_xrecord`、`get_entity_dict` 或 `has_entity_dict`。
-  - `params`：按动作使用 `name`、`dict_name`、`keyword`、`object_name`、`old_name`、`new_name`、`handle`、`data_types`、`data_values`。
-- `zwcad_manage_xdata`
-  - `action`：`list_apps`、`register_app`、`get_xdata`、`set_xdata` 或 `delete_xdata`。
-  - `params`：使用 `handle`、`app_name`、`data_types`、`data_values`；写入时 `data_types[0]` 应为 1001，`data_values[0]` 应为已注册应用名。
-- `zwcad_manage_utility`
-  - `action`：`translate_coordinates`、`polar_point`、`angle_to_real`、`angle_to_string`、`real_to_string`、`distance_to_real`、`prompt` 或 `get_object_id_string`。
-  - `params`：坐标转换使用 `point`、`from_system`、`to_system`、`displacement`；极坐标使用 `point`、`angle`、`distance`；角度和距离转换使用字符串、单位和精度；对象 ID 查询使用 `handle`、`hex`。
 
 ---
 
